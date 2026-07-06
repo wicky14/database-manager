@@ -24,7 +24,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Build with PyInstaller
-        run: pyinstaller build.spec --noconfirm --clean
+        run: python -m PyInstaller build.spec --noconfirm --clean
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -47,7 +47,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Build with PyInstaller
-        run: pyinstaller build.spec --noconfirm --clean
+        run: python -m PyInstaller build.spec --noconfirm --clean
 
       - name: Set version
         id: version
