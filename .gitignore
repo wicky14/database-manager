@@ -33,3 +33,6 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+
+#versi
+update_versi.md
