@@ -66,76 +66,80 @@ class MySQLDriver(BaseDriver):
             return self._cache
         cache = SchemaCache()
         cur = self._connection.cursor()
+        try:
+            cur.execute("""
+                SELECT table_schema, table_name
+                FROM information_schema.tables
+                WHERE table_type = 'BASE TABLE'
+                  AND table_schema = DATABASE()
+                ORDER BY table_name
+            """)
+            for row in cur.fetchall():
+                cache.tables.append(TableInfo(name=row[1], schema=row[0]))
 
-        cur.execute("""
-            SELECT table_schema, table_name
-            FROM information_schema.tables
-            WHERE table_type = 'BASE TABLE'
-              AND table_schema = DATABASE()
-            ORDER BY table_name
-        """)
-        for row in cur.fetchall():
-            cache.tables.append(TableInfo(name=row[1], schema=row[0]))
+            cur.execute("""
+                SELECT table_schema, table_name
+                FROM information_schema.views
+                WHERE table_schema = DATABASE()
+                ORDER BY table_name
+            """)
+            for row in cur.fetchall():
+                cache.views.append(TableInfo(name=row[1], schema=row[0]))
 
-        cur.execute("""
-            SELECT table_schema, table_name
-            FROM information_schema.views
-            WHERE table_schema = DATABASE()
-            ORDER BY table_name
-        """)
-        for row in cur.fetchall():
-            cache.views.append(TableInfo(name=row[1], schema=row[0]))
+            cur.execute("""
+                SELECT ROUTINE_NAME, ROUTINE_TYPE, DTD_IDENTIFIER
+                FROM information_schema.routines
+                WHERE routine_schema = DATABASE()
+                ORDER BY routine_name
+            """)
+            for row in cur.fetchall():
+                cache.routines.append(RoutineInfo(
+                    name=row[0],
+                    routine_type=row[1],
+                    return_type=row[2] or "",
+                ))
 
-        cur.execute("""
-            SELECT ROUTINE_NAME, ROUTINE_TYPE, DTD_IDENTIFIER
-            FROM information_schema.routines
-            WHERE routine_schema = DATABASE()
-            ORDER BY routine_name
-        """)
-        for row in cur.fetchall():
-            cache.routines.append(RoutineInfo(
-                name=row[0],
-                routine_type=row[1],
-                return_type=row[2] or "",
-            ))
+            cur.execute("""
+                SELECT trigger_name FROM information_schema.triggers
+                WHERE trigger_schema = DATABASE()
+            """)
+            cache.triggers = [row[0] for row in cur.fetchall()]
 
-        cur.execute("""
-            SELECT trigger_name FROM information_schema.triggers
-            WHERE trigger_schema = DATABASE()
-        """)
-        cache.triggers = [row[0] for row in cur.fetchall()]
-
-        cur.execute("""
-            SELECT table_name, column_name, data_type, is_nullable,
-                   column_default, column_key = 'PRI' as is_pk
-            FROM information_schema.columns
-            WHERE table_schema = DATABASE()
-            ORDER BY table_name, ordinal_position
-        """)
-        for row in cur.fetchall():
-            col = ColumnInfo(
-                name=row[1],
-                data_type=row[2],
-                nullable=row[3] == 'YES',
-                default=row[4],
-                is_pk=bool(row[5]),
-            )
-            cache.columns.setdefault(row[0], []).append(col)
-
-        cur.close()
+            cur.execute("""
+                SELECT table_name, column_name, data_type, is_nullable,
+                       column_default, column_key = 'PRI' as is_pk
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                ORDER BY table_name, ordinal_position
+            """)
+            for row in cur.fetchall():
+                col = ColumnInfo(
+                    name=row[1],
+                    data_type=row[2],
+                    nullable=row[3] == 'YES',
+                    default=row[4],
+                    is_pk=bool(row[5]),
+                )
+                cache.columns.setdefault(row[0], []).append(col)
+        finally:
+            cur.close()
         self._cache = cache
         return cache
 
+    @staticmethod
+    def _quote_id(name: str) -> str:
+        return "`" + name.replace("`", "``") + "`"
+
     def get_table_columns(self, table: str, schema: str = "") -> list[ColumnInfo]:
         cur = self._connection.cursor()
-        cur.execute(f"""
+        cur.execute("""
             SELECT column_name, data_type, is_nullable, column_default,
                    column_key = 'PRI' as is_pk
             FROM information_schema.columns
-            WHERE table_name = '{table}'
+            WHERE table_name = %s
               AND table_schema = DATABASE()
             ORDER BY ordinal_position
-        """)
+        """, (table,))
         cols = []
         for row in cur.fetchall():
             cols.append(ColumnInfo(
@@ -150,7 +154,7 @@ class MySQLDriver(BaseDriver):
 
     def get_view_source(self, view: str, schema: str = "") -> str:
         cur = self._connection.cursor()
-        cur.execute(f"SHOW CREATE VIEW `{view}`")
+        cur.execute(f"SHOW CREATE VIEW {self._quote_id(view)}")
         result = cur.fetchone()
         cur.close()
         if result:
@@ -159,7 +163,7 @@ class MySQLDriver(BaseDriver):
 
     def get_routine_source(self, routine: str, routine_type: str) -> str:
         cur = self._connection.cursor()
-        cur.execute(f"SHOW CREATE {'PROCEDURE' if routine_type == 'PROCEDURE' else 'FUNCTION'} `{routine}`")
+        cur.execute(f"SHOW CREATE {'PROCEDURE' if routine_type == 'PROCEDURE' else 'FUNCTION'} {self._quote_id(routine)}")
         result = cur.fetchone()
         cur.close()
         if result:
@@ -182,7 +186,7 @@ class MySQLDriver(BaseDriver):
 
     def get_indexes(self, table: str, schema: str = "") -> list[dict[str, Any]]:
         cur = self._connection.cursor()
-        cur.execute(f"SHOW INDEX FROM `{table}`")
+        cur.execute(f"SHOW INDEX FROM {self._quote_id(table)}")
         indexes = {}
         for row in cur.fetchall():
             name = row[2]
@@ -203,7 +207,7 @@ class MySQLDriver(BaseDriver):
 
     def get_trigger_source(self, trigger: str) -> str:
         cur = self._connection.cursor()
-        cur.execute(f"SHOW CREATE TRIGGER `{trigger}`")
+        cur.execute(f"SHOW CREATE TRIGGER {self._quote_id(trigger)}")
         result = cur.fetchone()
         cur.close()
         return result[2] if result else ""

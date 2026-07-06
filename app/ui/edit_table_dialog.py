@@ -41,12 +41,28 @@ class EditTableDialog(QDialog):
         self._build_ui()
         self._load_columns()
 
+    @staticmethod
+    def _quote_default(val: str) -> str:
+        if not val:
+            return ""
+        upper = val.upper().strip()
+        if upper in ("NOW", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME",
+                      "TRUE", "FALSE", "NULL"):
+            return " DEFAULT " + val
+        try:
+            float(val)
+            return " DEFAULT " + val
+        except ValueError:
+            pass
+        escaped = val.replace("'", "''")
+        return f" DEFAULT '{escaped}'"
+
     def _quote(self, name: str) -> str:
         if self._db_type == "mysql":
-            return f"`{name}`"
+            return "`" + name.replace("`", "``") + "`"
         if self._db_type == "sqlserver":
-            return f"[{name}]"
-        return f'"{name}"'
+            return "[" + name.replace("]", "]]") + "]"
+        return '"' + name.replace('"', '""') + '"'
 
     def _schema_prefix(self) -> str:
         if self._schema:
@@ -290,7 +306,7 @@ class EditTableDialog(QDialog):
         for col in cols:
             if not col["is_deleted"] and col["is_new"]:
                 nullable = " NOT NULL" if not col["nullable"] else ""
-                default_clause = f" DEFAULT {col['default']}" if col["default"] else ""
+                default_clause = self._quote_default(col["default"])
                 statements.append(
                     f"ALTER TABLE {self._full_table()} ADD COLUMN "
                     f"{self._quote(col['name'])} {col['type']}{nullable}{default_clause};"
@@ -352,7 +368,7 @@ class EditTableDialog(QDialog):
         for col in cols:
             if not col["is_deleted"] and col["is_new"]:
                 nullable = " NOT NULL" if not col["nullable"] else ""
-                default_clause = f" DEFAULT {col['default']}" if col["default"] else ""
+                default_clause = self._quote_default(col["default"])
                 statements.append(
                     f"ALTER TABLE {self._full_table()} ADD COLUMN "
                     f"{self._quote(col['name'])} {col['type']}{nullable}{default_clause};"
@@ -373,10 +389,10 @@ class EditTableDialog(QDialog):
             return
 
         try:
-            self._driver.execute_query("BEGIN")
+            self._driver.begin()
             for sql in statements:
                 self._driver.execute_query(sql)
-            self._driver.execute_query("COMMIT")
+            self._driver.commit()
             QMessageBox.information(
                 self, "Success",
                 f"Table '{self._table}' updated successfully."
@@ -386,7 +402,7 @@ class EditTableDialog(QDialog):
             self.accept()
         except Exception as e:
             try:
-                self._driver.execute_query("ROLLBACK")
+                self._driver.rollback()
             except Exception:
                 pass
             QMessageBox.critical(self, "Error", f"Failed to execute changes:\n{e}")

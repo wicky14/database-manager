@@ -67,92 +67,105 @@ class PostgreSQLDriver(BaseDriver):
         if self._cache:
             return self._cache
         cache = SchemaCache()
-        cur = self._connection.cursor()
+        with self._connection.cursor() as cur:
+            cur.execute("""
+                SELECT table_schema, table_name
+                FROM information_schema.tables
+                WHERE table_type = 'BASE TABLE'
+                  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY table_schema, table_name
+            """)
+            for row in cur.fetchall():
+                cache.tables.append(TableInfo(name=row[1], schema=row[0]))
 
-        cur.execute("""
-            SELECT table_schema, table_name
-            FROM information_schema.tables
-            WHERE table_type = 'BASE TABLE'
-              AND table_schema NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY table_schema, table_name
-        """)
-        for row in cur.fetchall():
-            cache.tables.append(TableInfo(name=row[1], schema=row[0]))
+            cur.execute("""
+                SELECT table_schema, table_name
+                FROM information_schema.views
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY table_schema, table_name
+            """)
+            for row in cur.fetchall():
+                cache.views.append(TableInfo(name=row[1], schema=row[0]))
 
-        cur.execute("""
-            SELECT table_schema, table_name
-            FROM information_schema.views
-            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY table_schema, table_name
-        """)
-        for row in cur.fetchall():
-            cache.views.append(TableInfo(name=row[1], schema=row[0]))
+            cur.execute("""
+                SELECT n.nspname, p.proname, p.prorettype::regtype::text,
+                       CASE WHEN p.prokind = 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END
+                FROM pg_proc p
+                JOIN pg_namespace n ON p.pronamespace = n.oid
+                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY n.nspname, p.proname
+            """)
+            for row in cur.fetchall():
+                cache.routines.append(RoutineInfo(
+                    name=row[1],
+                    routine_type=row[3],
+                    return_type=row[2],
+                ))
 
-        cur.execute("""
-            SELECT n.nspname, p.proname, p.prorettype::regtype::text,
-                   CASE WHEN p.prokind = 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END
-            FROM pg_proc p
-            JOIN pg_namespace n ON p.pronamespace = n.oid
-            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY n.nspname, p.proname
-        """)
-        for row in cur.fetchall():
-            cache.routines.append(RoutineInfo(
-                name=row[1],
-                routine_type=row[3],
-                return_type=row[2],
-            ))
+            cur.execute("""
+                SELECT event_object_schema, trigger_name
+                FROM information_schema.triggers
+                ORDER BY event_object_schema, trigger_name
+            """)
+            cache.triggers = [row[1] for row in cur.fetchall()]
 
-        cur.execute("""
-            SELECT event_object_schema, trigger_name
-            FROM information_schema.triggers
-            ORDER BY event_object_schema, trigger_name
-        """)
-        cache.triggers = [row[1] for row in cur.fetchall()]
+            cur.execute("""
+                SELECT table_name, column_name, data_type, is_nullable, column_default,
+                       (SELECT TRUE FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                        WHERE tc.table_name = c.table_name
+                          AND kcu.column_name = c.column_name
+                          AND tc.constraint_type = 'PRIMARY KEY'
+                          AND tc.table_schema = c.table_schema) as is_pk
+                FROM information_schema.columns c
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY table_name, ordinal_position
+            """)
+            for row in cur.fetchall():
+                col = ColumnInfo(
+                    name=row[1],
+                    data_type=row[2],
+                    nullable=row[3] == 'YES',
+                    default=row[4],
+                    is_pk=bool(row[5]),
+                )
+                cache.columns.setdefault(row[0], []).append(col)
 
-        cur.execute("""
-            SELECT table_name, column_name, data_type, is_nullable, column_default,
-                   (SELECT TRUE FROM information_schema.table_constraints tc
-                    JOIN information_schema.key_column_usage kcu
-                    ON tc.constraint_name = kcu.constraint_name
-                    WHERE tc.table_name = c.table_name
-                      AND kcu.column_name = c.column_name
-                      AND tc.constraint_type = 'PRIMARY KEY'
-                      AND tc.table_schema = c.table_schema) as is_pk
-            FROM information_schema.columns c
-            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY table_name, ordinal_position
-        """)
-        for row in cur.fetchall():
-            col = ColumnInfo(
-                name=row[1],
-                data_type=row[2],
-                nullable=row[3] == 'YES',
-                default=row[4],
-                is_pk=bool(row[5]),
-            )
-            cache.columns.setdefault(row[0], []).append(col)
-
-        cur.close()
         self._cache = cache
         return cache
 
     def get_table_columns(self, table: str, schema: str = "") -> list[ColumnInfo]:
         cur = self._connection.cursor()
-        schema_clause = f"AND table_schema = '{schema}'" if schema else "AND table_schema NOT IN ('pg_catalog', 'information_schema')"
-        cur.execute(f"""
-            SELECT column_name, data_type, is_nullable, column_default,
-                   (SELECT TRUE FROM information_schema.table_constraints tc
-                    JOIN information_schema.key_column_usage kcu
-                    ON tc.constraint_name = kcu.constraint_name
-                    WHERE tc.table_name = '{table}'
-                      AND kcu.column_name = c.column_name
-                      AND tc.constraint_type = 'PRIMARY KEY'
-                      AND tc.table_schema = c.table_schema) as is_pk
-            FROM information_schema.columns c
-            WHERE table_name = '{table}' {schema_clause}
-            ORDER BY ordinal_position
-        """)
+        if schema:
+            cur.execute("""
+                SELECT column_name, data_type, is_nullable, column_default,
+                       (SELECT TRUE FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                        WHERE tc.table_name = %s
+                          AND kcu.column_name = c.column_name
+                          AND tc.constraint_type = 'PRIMARY KEY'
+                          AND tc.table_schema = c.table_schema) as is_pk
+                FROM information_schema.columns c
+                WHERE table_name = %s AND table_schema = %s
+                ORDER BY ordinal_position
+            """, (table, table, schema))
+        else:
+            cur.execute("""
+                SELECT column_name, data_type, is_nullable, column_default,
+                       (SELECT TRUE FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                        WHERE tc.table_name = %s
+                          AND kcu.column_name = c.column_name
+                          AND tc.constraint_type = 'PRIMARY KEY'
+                          AND tc.table_schema = c.table_schema) as is_pk
+                FROM information_schema.columns c
+                WHERE table_name = %s
+                  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY ordinal_position
+            """, (table, table))
         cols = []
         for row in cur.fetchall():
             cols.append(ColumnInfo(
@@ -167,14 +180,22 @@ class PostgreSQLDriver(BaseDriver):
 
     def get_view_source(self, view: str, schema: str = "") -> str:
         cur = self._connection.cursor()
-        schema_clause = f"AND n.nspname = '{schema}'" if schema else "AND n.nspname NOT IN ('pg_catalog', 'information_schema')"
-        cur.execute(f"""
-            SELECT pg_get_viewdef(c.oid, true)
-            FROM pg_class c
-            JOIN pg_namespace n ON c.relnamespace = n.oid
-            WHERE c.relname = '{view}' {schema_clause}
-              AND c.relkind = 'v'
-        """)
+        if schema:
+            cur.execute("""
+                SELECT pg_get_viewdef(c.oid, true)
+                FROM pg_class c
+                JOIN pg_namespace n ON c.relnamespace = n.oid
+                WHERE c.relname = %s AND n.nspname = %s AND c.relkind = 'v'
+            """, (view, schema))
+        else:
+            cur.execute("""
+                SELECT pg_get_viewdef(c.oid, true)
+                FROM pg_class c
+                JOIN pg_namespace n ON c.relnamespace = n.oid
+                WHERE c.relname = %s
+                  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                  AND c.relkind = 'v'
+            """, (view,))
         result = cur.fetchone()
         cur.close()
         if result:
@@ -204,17 +225,29 @@ class PostgreSQLDriver(BaseDriver):
 
     def get_indexes(self, table: str, schema: str = "") -> list[dict[str, Any]]:
         cur = self._connection.cursor()
-        schema_clause = f"AND n.nspname = '{schema}'" if schema else "AND n.nspname NOT IN ('pg_catalog', 'information_schema')"
-        cur.execute(f"""
-            SELECT i.relname, a.attname, ix.indisunique, ix.indisprimary
-            FROM pg_index ix
-            JOIN pg_class t ON t.oid = ix.indrelid
-            JOIN pg_class i ON i.oid = ix.indexrelid
-            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-            JOIN pg_namespace n ON t.relnamespace = n.oid
-            WHERE t.relname = '{table}' {schema_clause}
-            ORDER BY i.relname, a.attnum
-        """)
+        if schema:
+            cur.execute("""
+                SELECT i.relname, a.attname, ix.indisunique, ix.indisprimary
+                FROM pg_index ix
+                JOIN pg_class t ON t.oid = ix.indrelid
+                JOIN pg_class i ON i.oid = ix.indexrelid
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+                JOIN pg_namespace n ON t.relnamespace = n.oid
+                WHERE t.relname = %s AND n.nspname = %s
+                ORDER BY i.relname, a.attnum
+            """, (table, schema))
+        else:
+            cur.execute("""
+                SELECT i.relname, a.attname, ix.indisunique, ix.indisprimary
+                FROM pg_index ix
+                JOIN pg_class t ON t.oid = ix.indrelid
+                JOIN pg_class i ON i.oid = ix.indexrelid
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+                JOIN pg_namespace n ON t.relnamespace = n.oid
+                WHERE t.relname = %s
+                  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY i.relname, a.attnum
+            """, (table,))
         indexes = {}
         for row in cur.fetchall():
             name = row[0]

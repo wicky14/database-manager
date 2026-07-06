@@ -3,6 +3,7 @@ import os
 import uuid
 from pathlib import Path
 
+from .crypto_utils import decrypt, encrypt
 from .db_drivers.base import ConnectionConfig
 
 CONFIG_DIR = Path.home() / ".config" / "database-manager"
@@ -19,6 +20,8 @@ def load_connections() -> list[ConnectionConfig]:
         return []
     try:
         data = json.loads(CONNECTIONS_FILE.read_text())
+        for c in data:
+            c["password"] = decrypt(c.get("password", ""))
         return [ConnectionConfig(**c) for c in data]
     except (json.JSONDecodeError, KeyError, TypeError):
         return []
@@ -34,7 +37,7 @@ def save_connections(connections: list[ConnectionConfig]) -> None:
             "host": c.host,
             "port": c.port,
             "user": c.user,
-            "password": c.password,
+            "password": encrypt(c.password),
             "database": c.database,
             "file_path": c.file_path,
             "charset": c.charset,

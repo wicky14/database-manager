@@ -11,9 +11,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize, QStringListModel, QEvent
 from PySide6.QtGui import QAction, QColor, QIcon
 
-from app.ui.spinner import SpinnerOverlay
-from app.ui.console import ConsolePanel
-from app.icon_manager import IconManager
+from .spinner import SpinnerOverlay
+from .console import ConsolePanel
+from ..icon_manager import IconManager
 
 _MODIFIED_BG = QColor("#fde68a")
 _NEW_ROW_BG = QColor("#d1fae5")
@@ -130,6 +130,8 @@ class DataEditor(QWidget):
         if isinstance(val, int) or isinstance(val, float):
             return str(val)
         escaped = str(val).replace("'", "''")
+        if self._db_type == "mysql":
+            escaped = escaped.replace("\\", "\\\\")
         return f"'{escaped}'"
 
     def _sqlserver_dt_quote(self, quoted: str, col_type: str) -> str:
@@ -293,6 +295,16 @@ class DataEditor(QWidget):
         self._console.setVisible(visible)
         self._console_btn.setChecked(visible)
 
+    @staticmethod
+    def _validate_clause(text: str) -> str:
+        forbidden = {";", "--", "/*", "*/", "DROP ", "ALTER ", "TRUNCATE ",
+                     "EXEC ", "EXECUTE ", "INSERT ", "UPDATE ", "DELETE ", "CREATE "}
+        upper = text.upper()
+        for f in forbidden:
+            if f in upper:
+                raise ValueError(f"Forbidden keyword or character in clause: {f.strip()}")
+        return text
+
     def _build_order_by(self) -> str:
         if self._sort_column:
             col = self._quote(self._sort_column)
@@ -300,6 +312,7 @@ class DataEditor(QWidget):
             return f"ORDER BY {col} {direction}"
         text = self._order_input.text().strip()
         if text:
+            self._validate_clause(text)
             upper = text.upper().strip()
             if not (upper.endswith(" ASC") or upper.endswith(" DESC")):
                 text = f"{text} ASC"
@@ -309,6 +322,7 @@ class DataEditor(QWidget):
     def _build_where_clause(self) -> str:
         text = self._where_input.text().strip()
         if text:
+            self._validate_clause(text)
             if text.upper().startswith("WHERE "):
                 return text
             return f"WHERE {text}"

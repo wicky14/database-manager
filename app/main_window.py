@@ -38,6 +38,10 @@ DB_TYPE_NAMES = {
 }
 
 
+def _escape_literal(val: str) -> str:
+    return "'" + val.replace("'", "''") + "'"
+
+
 class QueryThread(QThread):
     finished = Signal(list, list, str)
     error = Signal(str)
@@ -408,9 +412,9 @@ class MainWindow(QMainWindow):
 
         self._conn_thread = ConnectionThread(driver_cls, config)
         self._conn_thread.finished.connect(
-            lambda driver: self._on_connected(driver, config, index))
+            lambda driver, cfg=config, idx=index: self._on_connected(driver, cfg, idx))
         self._conn_thread.error.connect(
-            lambda err: self._on_connect_error(err, config))
+            lambda err, cfg=config: self._on_connect_error(err, cfg))
         self._conn_thread.start()
 
     def _on_connected(self, driver, config, index):
@@ -488,22 +492,20 @@ class MainWindow(QMainWindow):
     def _on_describe(self, table: str, schema: str, obj_type: str):
         db_type = self._current_db_type
         if db_type == "postgresql":
-            quoted = f'"{table}"'
-            schema_prefix = f'"{schema}".' if schema else ""
             self._run_sql_direct(
                 f"SELECT column_name, data_type, is_nullable, column_default "
                 f"FROM information_schema.columns "
-                f"WHERE table_name = '{table}'"
+                f"WHERE table_name = {_escape_literal(table)}"
             )
         elif db_type == "mysql":
-            self._run_sql_direct(f"DESCRIBE `{table}`")
+            self._run_sql_direct(f"DESCRIBE {self._quote_object(table)}")
         elif db_type == "sqlite":
-            self._run_sql_direct(f"PRAGMA table_info('{table}')")
+            self._run_sql_direct(f"PRAGMA table_info({_escape_literal(table)})")
         elif db_type == "sqlserver":
             self._run_sql_direct(
                 f"SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT "
                 f"FROM INFORMATION_SCHEMA.COLUMNS "
-                f"WHERE TABLE_NAME = '{table}'"
+                f"WHERE TABLE_NAME = {_escape_literal(table)}"
             )
 
     def _on_indexes(self, table: str, schema: str, obj_type: str):
@@ -581,10 +583,10 @@ class MainWindow(QMainWindow):
 
         self._load_thread = LoadSourceThread(self._driver, view, schema, "view")
         self._load_thread.finished.connect(
-            lambda source: self._on_view_loaded(editor, console, view, schema, source)
+            lambda source, ed=editor, cn=console, v=view, s=schema: self._on_view_loaded(ed, cn, v, s, source)
         )
         self._load_thread.error.connect(
-            lambda err: self._on_edit_source_error(editor, console, view, err)
+            lambda err, ed=editor, cn=console, v=view: self._on_edit_source_error(ed, cn, v, err)
         )
         self._load_thread.start()
 
@@ -645,10 +647,10 @@ class MainWindow(QMainWindow):
 
         self._load_thread = LoadSourceThread(self._driver, routine, routine_type, "routine")
         self._load_thread.finished.connect(
-            lambda source: self._on_routine_loaded(editor, console, routine, source)
+            lambda source, ed=editor, cn=console, r=routine: self._on_routine_loaded(ed, cn, r, source)
         )
         self._load_thread.error.connect(
-            lambda err: self._on_edit_source_error(editor, console, routine, err)
+            lambda err, ed=editor, cn=console, r=routine: self._on_edit_source_error(ed, cn, r, err)
         )
         self._load_thread.start()
 
@@ -697,10 +699,10 @@ class MainWindow(QMainWindow):
 
         self._load_thread = LoadSourceThread(self._driver, trigger, "", "trigger")
         self._load_thread.finished.connect(
-            lambda source: self._on_trigger_loaded(editor, console, trigger, source)
+            lambda source, ed=editor, cn=console, t=trigger: self._on_trigger_loaded(ed, cn, t, source)
         )
         self._load_thread.error.connect(
-            lambda err: self._on_edit_source_error(editor, console, trigger, err)
+            lambda err, ed=editor, cn=console, t=trigger: self._on_edit_source_error(ed, cn, t, err)
         )
         self._load_thread.start()
 
@@ -742,7 +744,11 @@ class MainWindow(QMainWindow):
             return
 
         if self._current_db_type == "sqlite":
-            sql = f"DELETE FROM {full_name}; VACUUM;"
+            self._driver.execute_query(f"DELETE FROM {full_name}")
+            self._driver.execute_query("VACUUM")
+            self._refresh_schema()
+            self.statusBar().showMessage(f"Table {full_name} truncated")
+            return
         else:
             sql = f"TRUNCATE TABLE {full_name};"
         self._run_sql_direct(sql)
@@ -796,9 +802,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         clear_saved_tabs()
-        editor = self._tabs.currentWidget().findChild(QueryEditor)
-        if editor:
-            editor.setFocus()
+        widget = self._tabs.currentWidget()
+        if widget:
+            editor = widget.findChild(QueryEditor)
+            if editor:
+                editor.setFocus()
 
     def _restore_one_tab(self, tab_info: dict):
         t = tab_info.get("type", "")
@@ -926,9 +934,9 @@ class MainWindow(QMainWindow):
     def _execute_single(self, sql: str, result, console=None):
         self._query_thread = QueryThread(self._driver, sql)
         self._query_thread.finished.connect(
-            lambda cols, rows, msg: self._on_query_result(cols, rows, msg, result, console, sql))
+            lambda cols, rows, msg, r=result, cn=console, s=sql: self._on_query_result(cols, rows, msg, r, cn, s))
         self._query_thread.error.connect(
-            lambda err: self._on_query_error(err, result, console))
+            lambda err, r=result, cn=console: self._on_query_error(err, r, cn))
         self._query_thread.start()
 
     def _clean_extra_tabs(self, bottom_tabs, console):
@@ -949,9 +957,9 @@ class MainWindow(QMainWindow):
         self._multi_thread = MultiQueryThread(self._driver, statements, self._current_db_type)
         original_sql = "; ".join(statements)
         self._multi_thread.finished.connect(
-            lambda results, logs: self._on_multi_result(results, logs, bottom_tabs, console, original_sql))
+            lambda results, logs, bt=bottom_tabs, cn=console, osql=original_sql: self._on_multi_result(results, logs, bt, cn, osql))
         self._multi_thread.error.connect(
-            lambda err: self._on_multi_error(err, bottom_tabs, console))
+            lambda err, bt=bottom_tabs, cn=console: self._on_multi_error(err, bt, cn))
         self._multi_thread.start()
 
     def _execute_paginated(self, sql: str, result, console=None):
@@ -968,9 +976,9 @@ class MainWindow(QMainWindow):
 
         self._page_thread = PaginatedQueryThread(self._driver, sql, db_type, 1, page_size)
         self._page_thread.finished.connect(
-            lambda cols, rows, msg, total: self._on_paginated_result(cols, rows, msg, total, result, console, sql))
+            lambda cols, rows, msg, total, r=result, cn=console, s=sql: self._on_paginated_result(cols, rows, msg, total, r, cn, s))
         self._page_thread.error.connect(
-            lambda err: self._on_query_error(err, result, console))
+            lambda err, r=result, cn=console: self._on_query_error(err, r, cn))
         self._page_thread.start()
 
     def _on_paginated_result(self, columns, rows, message, total, result, console=None, sql=""):
@@ -983,7 +991,7 @@ class MainWindow(QMainWindow):
             return
         container = self._tabs.currentWidget()
         bottom_tabs = container.findChild(QTabWidget) if container else None
-        console = bottom_tabs.findChild(ConsolePanel) if bottom_tabs else None
+        console = bottom_tabs.findChild(ConsolePanel) if bottom_tabs is not None else None
 
         result._page = page
         result._page_size = page_size
@@ -993,9 +1001,9 @@ class MainWindow(QMainWindow):
 
         self._page_thread = QueryThread(self._driver, sql)
         self._page_thread.finished.connect(
-            lambda cols, rows, msg: self._on_page_loaded(cols, rows, msg, result, console))
+            lambda cols, rows, msg, r=result, cn=console: self._on_page_loaded(cols, rows, msg, r, cn))
         self._page_thread.error.connect(
-            lambda err: self._on_query_error(err, result, console))
+            lambda err, r=result, cn=console: self._on_query_error(err, r, cn))
         self._page_thread.start()
 
     def _on_page_loaded(self, columns, rows, message, result, console=None):
@@ -1030,8 +1038,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Executing query...")
 
         self._query_thread = QueryThread(self._driver, sql)
-        self._query_thread.finished.connect(lambda cols, rows, msg: self._on_query_result(cols, rows, msg, result))
-        self._query_thread.error.connect(lambda err: self._on_query_error(err, result))
+        self._query_thread.finished.connect(lambda cols, rows, msg, r=result: self._on_query_result(cols, rows, msg, r))
+        self._query_thread.error.connect(lambda err, r=result: self._on_query_error(err, r))
         self._query_thread.start()
 
     def _on_query_result(self, columns, rows, message, result, console=None, sql=""):

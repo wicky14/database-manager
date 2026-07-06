@@ -18,11 +18,10 @@ def collect_tabs(tabs: QTabWidget) -> list[dict[str, Any]]:
 
         editor = widget.findChild(QueryEditor)
         if editor:
-            sql = editor.toPlainText()
             data.append({
                 "type": "query",
                 "title": title,
-                "sql": sql,
+                "sql": "",
             })
             continue
 

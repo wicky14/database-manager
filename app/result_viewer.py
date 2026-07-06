@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QAction, QColor, QBrush, QIcon, QFont
 
-from app.icon_manager import IconManager
+from .icon_manager import IconManager
 
 
 _NUMERIC_TYPES = {

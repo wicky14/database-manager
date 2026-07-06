@@ -347,10 +347,9 @@ class SchemaBrowser(QWidget):
             )
             menu.addAction(connect_action)
 
-            from .connection_manager import delete_connection
-            show_source = QAction("Delete", self)
-            show_source.triggered.connect(lambda: self._delete_saved_connection(idx))
-            menu.addAction(show_source)
+            close_action = QAction("Close Connection", self)
+            close_action.triggered.connect(lambda: self._close_saved_connection(idx))
+            menu.addAction(close_action)
 
             menu.exec(self._tree.mapToGlobal(pos))
             return
@@ -527,8 +526,17 @@ class SchemaBrowser(QWidget):
             if 0 <= idx < len(self._saved_connections):
                 self.connect_requested.emit(idx, self._saved_connections[idx])
 
-    def _delete_saved_connection(self, idx):
+    def _close_saved_connection(self, idx):
         if 0 <= idx < len(self._saved_connections):
+            conn = self._saved_connections[idx]
+            reply = QMessageBox.question(
+                self, "Close Connection",
+                f"Remove '{conn.name}' from saved connections?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
             from .connection_manager import delete_connection
             delete_connection(idx)
             self._saved_connections.pop(idx)
