@@ -8,6 +8,7 @@ from PySide6.QtGui import QAction, QIcon, QKeySequence
 
 import json
 import re
+import warnings
 from pathlib import Path
 
 from .schema_browser import SchemaBrowser
@@ -873,13 +874,16 @@ class MainWindow(QMainWindow):
 
         if bottom_tabs and isinstance(bottom_tabs, QTabWidget) and bottom_tabs.indexOf(result) < 0:
             bottom_tabs.insertTab(0, result, "Result")
+            bottom_tabs.setCurrentIndex(0)
 
         result.clear_results()
         result.show_results([], [], "Executing...")
         self.statusBar().showMessage("Executing query...")
 
         try:
-            result.page_changed.disconnect(self._on_page_changed)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                result.page_changed.disconnect(self._on_page_changed)
         except TypeError:
             pass
         result.page_changed.connect(self._on_page_changed)

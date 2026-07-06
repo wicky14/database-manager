@@ -137,6 +137,8 @@ class QueryEditor(QPlainTextEdit):
         self._colors = colors or {}
         self._schema_cache = None
         self._completer = None
+        self._base_words = []
+        self._columns_map = {}
         self._setup_editor()
         self._setup_completer()
         self._setup_shortcuts()
@@ -221,16 +223,19 @@ class QueryEditor(QPlainTextEdit):
 
     def set_schema(self, tables: list[str], views: list[str],
                    routines: list[str], columns_map: dict[str, list[str]]):
-        words = list(SQL_KEYWORDS)
-        words.extend(tables)
-        words.extend(views)
-        words.extend(routines)
-        for table, cols in columns_map.items():
-            for col in cols:
-                words.append(f"{table}.{col}")
-                words.append(col)
-        words = sorted(set(words))
-        self._completer.setModel(QStringListModel(words))
+        self._columns_map = {k.lower(): v for k, v in columns_map.items()}
+        self._base_words = sorted(set(SQL_KEYWORDS) | set(tables) | set(views) | set(routines))
+        self._completer.setModel(QStringListModel(self._base_words))
+
+    @staticmethod
+    def _get_aliases(text: str) -> dict[str, str]:
+        aliases = {}
+        for m in re.finditer(
+            r'\b(?:FROM|JOIN)\s+(\w+)\s+(?:AS\s+)?(\w+)',
+            text, re.IGNORECASE
+        ):
+            aliases[m.group(2).lower()] = m.group(1).lower()
+        return aliases
 
     def _run_query(self):
         cursor = self.textCursor()
@@ -357,16 +362,46 @@ class QueryEditor(QPlainTextEdit):
             match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*$', before)
             prefix = match.group() if match else ""
             if len(prefix) >= 1:
-                self._completer.setCompletionPrefix(prefix)
-                if self._completer.completionCount() > 0:
-                    cr = self.cursorRect()
-                    cr.setWidth(self._completer.popup().sizeHintForColumn(0)
-                                + self._completer.popup().verticalScrollBar().sizeHint().width())
-                    self._completer.complete(cr)
+                if '.' in prefix:
+                    ref, _, after = prefix.rpartition('.')
+                    if ref:
+                        words = self._get_dot_completions(ref)
+                        if words:
+                            self._completer.setModel(QStringListModel(words))
+                            self._completer.setCompletionPrefix(prefix)
+                            cr = self.cursorRect()
+                            cr.setWidth(self._completer.popup().sizeHintForColumn(0)
+                                        + self._completer.popup().verticalScrollBar().sizeHint().width())
+                            self._completer.complete(cr)
+                        else:
+                            self._completer.popup().hide()
+                    else:
+                        self._completer.popup().hide()
                 else:
-                    self._completer.popup().hide()
+                    self._completer.setModel(QStringListModel(self._base_words))
+                    self._completer.setCompletionPrefix(prefix)
+                    if self._completer.completionCount() > 0:
+                        cr = self.cursorRect()
+                        cr.setWidth(self._completer.popup().sizeHintForColumn(0)
+                                    + self._completer.popup().verticalScrollBar().sizeHint().width())
+                        self._completer.complete(cr)
+                    else:
+                        self._completer.popup().hide()
             else:
                 self._completer.popup().hide()
+
+    def _get_dot_completions(self, ref: str) -> list[str]:
+        text = self.toPlainText()
+        aliases = self._get_aliases(text)
+        ref_lower = ref.lower()
+        words = list(self._base_words)
+        if ref_lower in self._columns_map:
+            for col in self._columns_map[ref_lower]:
+                words.append(f"{ref}.{col}")
+        if ref_lower in aliases and aliases[ref_lower] in self._columns_map:
+            for col in self._columns_map[aliases[ref_lower]]:
+                words.append(f"{ref}.{col}")
+        return sorted(set(words))
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)

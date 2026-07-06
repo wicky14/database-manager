@@ -56,7 +56,5 @@ class ConsolePanel(QWidget):
 
         self._list.insertItem(0, item)
 
-        self.show_panel()
-
     def clear_log(self):
         self._list.clear()
