@@ -32,13 +32,6 @@ jobs:
           name: database-manager-linux
           path: dist/database-manager
 
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/database-manager
-          generate_release_notes: true
-
   build-windows:
     runs-on: windows-latest
     steps:
@@ -69,23 +62,40 @@ jobs:
       - name: Build installer
         run: ISCC /DMyAppVersion="${{ steps.version.outputs.value }}" installer.iss
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-manager-windows
-          path: dist/Setup*.exe
-
       - name: Upload portable exe
         uses: actions/upload-artifact@v4
         with:
           name: database-manager-windows-portable
           path: dist/database-manager.exe
 
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-manager-windows-installer
+          path: dist/Setup*.exe
+
+  create-release:
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: database-manager-linux
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: database-manager-windows-portable
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: database-manager-windows-installer
+          path: release
+
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/Setup*.exe
-            dist/database-manager.exe
+          files: release/*
           generate_release_notes: true

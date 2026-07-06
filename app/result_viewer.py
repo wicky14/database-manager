@@ -10,9 +10,17 @@ from PySide6.QtWidgets import (
     QMenu, QApplication, QComboBox, QToolButton,
 )
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QAction, QColor, QBrush, QIcon
+from PySide6.QtGui import QAction, QColor, QBrush, QIcon, QFont
 
 from app.icon_manager import IconManager
+
+
+_NUMERIC_TYPES = {
+    "INTEGER", "INT", "BIGINT", "SMALLINT", "TINYINT",
+    "SERIAL", "BIGSERIAL", "SMALLSERIAL",
+    "FLOAT", "DOUBLE", "REAL", "NUMERIC", "DECIMAL",
+    "DOUBLE PRECISION",
+}
 
 
 class NumericTableItem(QTableWidgetItem):
@@ -152,6 +160,19 @@ class ResultViewer(QWidget):
                     item.setForeground(QColor("#9ca3af"))
                     item.setFont(item.font())
                 self._table.setItem(r, c, item)
+
+        alignment = [Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter] * len(columns)
+        for c in range(len(columns)):
+            for r in range(min(len(rows), 5)):
+                val = rows[r][c]
+                if val is not None and isinstance(val, (int, float)):
+                    alignment[c] = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    break
+        for r in range(self._table.rowCount()):
+            for c in range(self._table.columnCount()):
+                item = self._table.item(r, c)
+                if item and c < len(alignment):
+                    item.setTextAlignment(alignment[c])
 
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._table.resizeColumnsToContents()

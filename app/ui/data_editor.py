@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QPushButton, QLabel, QLineEdit,
     QMessageBox, QAbstractItemView, QMenu, QApplication, QToolButton,
-    QCompleter, QSplitter,
+    QCompleter, QSplitter, QStyledItemDelegate, QDateEdit, QDateTimeEdit,
 )
 from PySide6.QtCore import Qt, Signal, QSize, QStringListModel, QEvent
 from PySide6.QtGui import QAction, QColor, QIcon
@@ -32,6 +32,45 @@ _NUMERIC_TYPES = {
     "FLOAT", "DOUBLE", "REAL", "NUMERIC", "DECIMAL",
     "DOUBLE PRECISION",
 }
+
+
+class DateTimeDelegate(QStyledItemDelegate):
+    def __init__(self, col_types: list[str], parent=None):
+        super().__init__(parent)
+        self._col_types = col_types
+
+    def createEditor(self, parent, option, index):
+        col_type = self._col_types[index.column()] if index.column() < len(self._col_types) else ""
+        if col_type in ("DATE",):
+            editor = QDateEdit(parent)
+            editor.setCalendarPopup(True)
+            editor.setDisplayFormat("yyyy-MM-dd")
+            editor.setSpecialValueText("NULL")
+        else:
+            editor = QDateTimeEdit(parent)
+            editor.setCalendarPopup(True)
+            editor.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+            editor.setSpecialValueText("NULL")
+        return editor
+
+    def setEditorData(self, editor, index):
+        val = index.data(Qt.ItemDataRole.DisplayRole)
+        if val is None or val == "NULL":
+            editor.clear()
+            return
+        col_type = self._col_types[index.column()] if index.column() < len(self._col_types) else ""
+        fmt = "yyyy-MM-dd" if col_type in ("DATE",) else "yyyy-MM-dd HH:mm:ss"
+        dt = editor.dateTimeFromText(val)
+        if dt.isValid():
+            editor.setDateTime(dt)
+        else:
+            editor.clear()
+
+    def setModelData(self, editor, model, index):
+        if editor.text() == "NULL":
+            model.setData(index, "NULL", Qt.ItemDataRole.EditRole)
+        else:
+            model.setData(index, editor.text(), Qt.ItemDataRole.EditRole)
 
 
 class DataEditor(QWidget):
@@ -156,12 +195,13 @@ class DataEditor(QWidget):
 
         filter_bar = QHBoxLayout()
         filter_bar.setSpacing(2)
+        filter_bar.setContentsMargins(0, 0, 8, 0)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         where_container = QWidget()
         where_layout = QHBoxLayout(where_container)
-        where_layout.setContentsMargins(0, 0, 0, 0)
+        where_layout.setContentsMargins(8, 0, 8, 0)
         where_label = QLabel("WHERE")
         where_layout.addWidget(where_label)
         self._where_input = QLineEdit()
@@ -172,7 +212,7 @@ class DataEditor(QWidget):
 
         order_container = QWidget()
         order_layout = QHBoxLayout(order_container)
-        order_layout.setContentsMargins(0, 0, 0, 0)
+        order_layout.setContentsMargins(8, 0, 8, 0)
         order_label = QLabel("ORDER BY")
         order_layout.addWidget(order_label)
         self._order_input = QLineEdit()
@@ -408,6 +448,11 @@ class DataEditor(QWidget):
                     self._col_types[i] = col_infos[col_names.index(c)].data_type.upper()
         except Exception:
             self._col_types = [""] * len(columns)
+
+        self._datetime_delegate = DateTimeDelegate(self._col_types, self._table_widget)
+        for i, col_type in enumerate(self._col_types):
+            if col_type in _DATE_TYPES:
+                self._table_widget.setItemDelegateForColumn(i, self._datetime_delegate)
 
         self._table_widget.setRowCount(len(rows))
         for r, row in enumerate(self._data):
