@@ -27,6 +27,11 @@ A multi-database management GUI built with PySide6. Supports PostgreSQL, MySQL, 
 | SQLite     | sqlite3 (built-in)    |                              |
 | SQL Server | pymssql               | Supports `GO` batch separator|
 
+## Screenshot
+
+<img width="1038" height="762" alt="database" src="https://github.com/user-attachments/assets/86bafd57-9101-4839-a28b-81fdef4c1065" />
+
+
 ## Installation
 
 ### From source
