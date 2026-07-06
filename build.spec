@@ -28,6 +28,10 @@ a = Analysis(
         ('app/resources/new_query.svg', 'app/resources'),
         ('app/resources/refresh.svg', 'app/resources'),
         ('app/resources/delete.svg', 'app/resources'),
+        ('app/resources/history.svg', 'app/resources'),
+        ('app/resources/console.svg', 'app/resources'),
+        ('app/resources/chevron_left.svg', 'app/resources'),
+        ('app/resources/chevron_right.svg', 'app/resources'),
     ],
     hiddenimports=[
         'app',
