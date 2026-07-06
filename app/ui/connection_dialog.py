@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QLabel, QDialogButtonBox, QGroupBox, QGridLayout, QWidget,
-    QFileDialog, QMessageBox,
+    QFileDialog, QMessageBox, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
@@ -90,6 +90,12 @@ class ConnectionDialog(QDialog):
         form_layout.addWidget(QLabel("Database:"), 5, 0)
         form_layout.addWidget(self._database_input, 5, 1)
 
+        self._charset_combo = QComboBox()
+        self._charset_combo.addItem("New MySQL (utf8mb4)", "")
+        self._charset_combo.addItem("Old MySQL (utf8)", "utf8")
+        form_layout.addWidget(QLabel("Charset:"), 6, 0)
+        form_layout.addWidget(self._charset_combo, 6, 1)
+
         self._file_input = QLineEdit()
         self._file_input.setPlaceholderText("/path/to/database.sqlite")
         self._file_input.setVisible(False)
@@ -132,11 +138,15 @@ class ConnectionDialog(QDialog):
     def _update_visibility(self):
         is_sqlite = self._selected_type == "sqlite"
         is_server = not is_sqlite
+        is_mysql = self._selected_type == "mysql"
         for w in [self._host_input, self._port_input, self._user_input,
                   self._password_input, self._database_input]:
             w.setVisible(is_server)
         for i in range(1, 6):
             self.layout().itemAt(2).widget().layout().itemAtPosition(i, 0).widget().setVisible(is_server)
+
+        self._charset_combo.setVisible(is_mysql)
+        self.layout().itemAt(2).widget().layout().itemAtPosition(6, 0).widget().setVisible(is_mysql)
 
         self._file_input.setVisible(is_sqlite)
         self._file_browse_btn.setVisible(is_sqlite)
@@ -164,6 +174,9 @@ class ConnectionDialog(QDialog):
         self._password_input.setText(config.password)
         self._database_input.setText(config.database)
         self._file_input.setText(config.file_path)
+        idx = self._charset_combo.findData(config.charset)
+        if idx >= 0:
+            self._charset_combo.setCurrentIndex(idx)
 
     def _get_config(self) -> ConnectionConfig:
         if self._selected_type == "sqlite":
@@ -180,6 +193,7 @@ class ConnectionDialog(QDialog):
             user=self._user_input.text().strip() or "postgres",
             password=self._password_input.text(),
             database=self._database_input.text().strip() or "",
+            charset=self._charset_combo.currentData(),
         )
 
     def _test_connection(self):

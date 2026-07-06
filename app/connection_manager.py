@@ -37,6 +37,7 @@ def save_connections(connections: list[ConnectionConfig]) -> None:
             "password": c.password,
             "database": c.database,
             "file_path": c.file_path,
+            "charset": c.charset,
         }
         data.append(d)
     CONNECTIONS_FILE.write_text(json.dumps(data, indent=2))

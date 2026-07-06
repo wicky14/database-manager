@@ -13,6 +13,7 @@ class ConnectionConfig:
     password: str = ""
     database: str = ""
     file_path: str = ""
+    charset: str = ""
 
 
 @dataclass

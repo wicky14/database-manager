@@ -15,7 +15,7 @@ class MySQLDriver(BaseDriver):
             password=self.config.password,
             database=self.config.database,
             connect_timeout=10,
-            charset="utf8mb4",
+            charset=self.config.charset or "utf8mb4",
         )
         self._connection.autocommit = False
         self._cache = None
