@@ -87,6 +87,19 @@ class SQLiteDriver(BaseDriver):
         """)
         cache.triggers = [row[0] for row in cur.fetchall()]
 
+        for t in cache.tables:
+            cur.execute(f"PRAGMA table_info('{t.name}')")
+            cols = []
+            for row in cur.fetchall():
+                cols.append(ColumnInfo(
+                    name=row[1],
+                    data_type=row[2] or "TEXT",
+                    nullable=not row[3],
+                    default=row[4],
+                    is_pk=bool(row[5]),
+                ))
+            cache.columns[t.name] = cols
+
         cur.close()
         self._cache = cache
         return cache

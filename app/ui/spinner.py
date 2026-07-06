@@ -9,7 +9,7 @@ class SpinnerOverlay(QWidget):
         self._angle = 0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._rotate)
-        self._text = "Loading..."
+        self._text = ""
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.setVisible(False)
 

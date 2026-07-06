@@ -127,6 +127,27 @@ class SQLServerDriver(BaseDriver):
         """)
         cache.triggers = [row[0] for row in cur.fetchall()]
 
+        cur.execute("""
+            SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
+                   (SELECT COUNT(*) FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                    JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                    ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                    WHERE kcu.TABLE_NAME = c.TABLE_NAME
+                      AND kcu.COLUMN_NAME = c.COLUMN_NAME
+                      AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY') as is_pk
+            FROM INFORMATION_SCHEMA.COLUMNS c
+            ORDER BY TABLE_NAME, ORDINAL_POSITION
+        """)
+        for row in cur.fetchall():
+            col = ColumnInfo(
+                name=row[1],
+                data_type=row[2],
+                nullable=row[3] == 'YES',
+                default=row[4],
+                is_pk=bool(row[5]),
+            )
+            cache.columns.setdefault(row[0], []).append(col)
+
         cur.close()
         self._cache = cache
         return cache

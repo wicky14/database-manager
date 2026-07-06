@@ -105,6 +105,23 @@ class MySQLDriver(BaseDriver):
         """)
         cache.triggers = [row[0] for row in cur.fetchall()]
 
+        cur.execute("""
+            SELECT table_name, column_name, data_type, is_nullable,
+                   column_default, column_key = 'PRI' as is_pk
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE()
+            ORDER BY table_name, ordinal_position
+        """)
+        for row in cur.fetchall():
+            col = ColumnInfo(
+                name=row[1],
+                data_type=row[2],
+                nullable=row[3] == 'YES',
+                default=row[4],
+                is_pk=bool(row[5]),
+            )
+            cache.columns.setdefault(row[0], []).append(col)
+
         cur.close()
         self._cache = cache
         return cache

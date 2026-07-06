@@ -110,6 +110,29 @@ class PostgreSQLDriver(BaseDriver):
         """)
         cache.triggers = [row[1] for row in cur.fetchall()]
 
+        cur.execute("""
+            SELECT table_name, column_name, data_type, is_nullable, column_default,
+                   (SELECT TRUE FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    WHERE tc.table_name = c.table_name
+                      AND kcu.column_name = c.column_name
+                      AND tc.constraint_type = 'PRIMARY KEY'
+                      AND tc.table_schema = c.table_schema) as is_pk
+            FROM information_schema.columns c
+            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY table_name, ordinal_position
+        """)
+        for row in cur.fetchall():
+            col = ColumnInfo(
+                name=row[1],
+                data_type=row[2],
+                nullable=row[3] == 'YES',
+                default=row[4],
+                is_pk=bool(row[5]),
+            )
+            cache.columns.setdefault(row[0], []).append(col)
+
         cur.close()
         self._cache = cache
         return cache

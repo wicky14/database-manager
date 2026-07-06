@@ -19,6 +19,7 @@ from .ui.data_editor import DataEditor
 from .ui.edit_table_dialog import EditTableDialog
 from .ui.query_history_dialog import QueryHistoryDialog
 from .ui.console import ConsolePanel
+from .ui.spinner import SpinnerOverlay
 from .connection_manager import (
     load_connections, add_connection, delete_connection,
 )
@@ -74,6 +75,27 @@ class LoadSourceThread(QThread):
             else:
                 source = self._driver.get_routine_source(self._obj_name, self._schema_or_type)
             self.finished.emit(source)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class ConnectionThread(QThread):
+    finished = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, driver_cls, config):
+        super().__init__()
+        self._driver_cls = driver_cls
+        self._config = config
+        self.driver = None
+
+    def run(self):
+        try:
+            driver = self._driver_cls(self._config)
+            driver.connect()
+            driver.get_schema_cache()
+            self.driver = driver
+            self.finished.emit(driver)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -378,26 +400,37 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Unknown database type: {config.type}")
             return
 
-        driver = driver_cls(config)
         self.statusBar().showMessage(f"Connecting to {config.name}...")
 
-        try:
-            QApplication.processEvents()
-            driver.connect()
-            self._driver = driver
-            self._active_connection_index = index
-            self._current_db_type = config.type
+        self._spinner = SpinnerOverlay(self)
+        self._spinner.show()
+        QApplication.processEvents()
 
-            db_name = DB_TYPE_NAMES.get(config.type, config.type)
-            self.setWindowTitle(f"Database Manager - {config.name} ({db_name})")
-            self.statusBar().showMessage(f"Connected to {config.name}")
+        self._conn_thread = ConnectionThread(driver_cls, config)
+        self._conn_thread.finished.connect(
+            lambda driver: self._on_connected(driver, config, index))
+        self._conn_thread.error.connect(
+            lambda err: self._on_connect_error(err, config))
+        self._conn_thread.start()
 
-            self._schema.set_connection(driver, config.name)
-            self._update_editor_schema()
-        except Exception as e:
-            QMessageBox.critical(self, "Connection Failed",
-                                 f"Could not connect to {config.name}:\n{e}")
-            self.statusBar().showMessage("Connection failed")
+    def _on_connected(self, driver, config, index):
+        self._spinner.hide()
+        self._driver = driver
+        self._active_connection_index = index
+        self._current_db_type = config.type
+
+        db_name = DB_TYPE_NAMES.get(config.type, config.type)
+        self.setWindowTitle(f"Database Manager - {config.name} ({db_name})")
+        self.statusBar().showMessage(f"Connected to {config.name}")
+
+        self._schema.set_connection(driver, config.name)
+        self._update_editor_schema()
+
+    def _on_connect_error(self, error, config):
+        self._spinner.hide()
+        QMessageBox.critical(self, "Connection Failed",
+                             f"Could not connect to {config.name}:\n{error}")
+        self.statusBar().showMessage("Connection failed")
 
     def _update_editor_schema(self):
         if not self._driver:
@@ -410,11 +443,8 @@ class MainWindow(QMainWindow):
 
             columns_map = {}
             for t in cache.tables:
-                try:
-                    cols = self._driver.get_table_columns(t.name, t.schema)
-                    columns_map[t.name] = [c.name for c in cols]
-                except Exception:
-                    columns_map[t.name] = []
+                cols = cache.columns.get(t.name, [])
+                columns_map[t.name] = [c.name for c in cols]
 
             for i in range(self._tabs.count()):
                 editor = self._tabs.widget(i).findChild(QueryEditor)
