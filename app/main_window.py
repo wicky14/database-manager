@@ -227,6 +227,7 @@ class MainWindow(QMainWindow):
         self._active_connection_index = -1
         self._query_thread = None
         self._current_db_type = ""
+        self._active_connection_name = ""
         self._query_history = []
         self._build_ui()
         self._build_menu()
@@ -264,6 +265,7 @@ class MainWindow(QMainWindow):
         self._schema.edit_view_requested.connect(self._on_edit_view)
         self._schema.edit_routine_requested.connect(self._on_edit_routine)
         self._schema.edit_trigger_requested.connect(self._on_edit_trigger)
+        self._schema.create_trigger_requested.connect(self._on_create_trigger)
         self._schema.truncate_table_requested.connect(self._on_truncate_table)
         splitter.addWidget(self._schema)
 
@@ -421,6 +423,7 @@ class MainWindow(QMainWindow):
         self._spinner.hide()
         self._driver = driver
         self._active_connection_index = index
+        self._active_connection_name = config.name
         self._current_db_type = config.type
 
         db_name = DB_TYPE_NAMES.get(config.type, config.type)
@@ -661,6 +664,48 @@ class MainWindow(QMainWindow):
         if console:
             console.add_entry(routine, log_msg, True)
 
+    def _on_create_trigger(self):
+        if not self._driver:
+            QMessageBox.warning(self, "Not Connected", "Please connect to a database first.")
+            return
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
+        editor = QueryEditor()
+        editor.setPlainText("CREATE TRIGGER trigger_name\n"
+                             "AFTER INSERT ON table_name\n"
+                             "FOR EACH ROW\n"
+                             "BEGIN\n"
+                             "    -- your logic here\n"
+                             "END;")
+        editor.setReadOnly(False)
+        editor.query_requested.connect(self._execute_sql)
+        splitter.addWidget(editor)
+
+        bottom_tabs = QTabWidget()
+        bottom_tabs.setDocumentMode(True)
+
+        result = ResultViewer()
+        result.status_message.connect(self.statusBar().showMessage)
+        bottom_tabs.addTab(result, "Result")
+
+        console = ConsolePanel()
+        bottom_tabs.addTab(console, "Console")
+
+        splitter.addWidget(bottom_tabs)
+        splitter.setSizes([300, 300])
+        layout.addWidget(splitter)
+
+        self._tabs.addTab(tab, "New Trigger")
+        self._tabs.setCurrentWidget(tab)
+        self._update_editor_schema()
+        editor.setFocus()
+        self.statusBar().showMessage("Fill in the trigger template and run with F5")
+
     def _on_edit_trigger(self, trigger: str):
         if not self._driver:
             QMessageBox.warning(self, "Not Connected", "Please connect to a database first.")
@@ -757,7 +802,13 @@ class MainWindow(QMainWindow):
         try:
             if HISTORY_FILE.exists():
                 data = json.loads(HISTORY_FILE.read_text())
-                self._query_history = data if isinstance(data, list) else []
+                if isinstance(data, list):
+                    if data and isinstance(data[0], str):
+                        self._query_history = [{"sql": s, "connection": ""} for s in data]
+                    else:
+                        self._query_history = data
+                else:
+                    self._query_history = []
         except Exception:
             self._query_history = []
 
@@ -768,13 +819,13 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _add_query_history(self, sql: str):
+    def _add_query_history(self, sql: str, connection: str = ""):
         sql = sql.strip()
         if not sql:
             return
-        if self._query_history and self._query_history[-1] == sql:
+        if self._query_history and self._query_history[-1]["sql"] == sql:
             return
-        self._query_history.append(sql)
+        self._query_history.append({"sql": sql, "connection": connection})
         if len(self._query_history) > 100:
             self._query_history = self._query_history[-100:]
         self._save_query_history()
@@ -783,7 +834,8 @@ class MainWindow(QMainWindow):
         if not self._query_history:
             QMessageBox.information(self, "Query History", "No query history yet.")
             return
-        dialog = QueryHistoryDialog(self._query_history, self)
+        dialog = QueryHistoryDialog(self._query_history, self, current_connection=self._active_connection_name)
+        dialog.history_cleared.connect(self._save_query_history)
         if dialog.exec() == QueryHistoryDialog.DialogCode.Accepted:
             sql = dialog.selected_query
             if sql:
@@ -1038,14 +1090,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Executing query...")
 
         self._query_thread = QueryThread(self._driver, sql)
-        self._query_thread.finished.connect(lambda cols, rows, msg, r=result: self._on_query_result(cols, rows, msg, r))
+        self._query_thread.finished.connect(lambda cols, rows, msg, r=result, s=sql: self._on_query_result(cols, rows, msg, r, sql=s))
         self._query_thread.error.connect(lambda err, r=result: self._on_query_error(err, r))
         self._query_thread.start()
 
     def _on_query_result(self, columns, rows, message, result, console=None, sql=""):
         result.show_results(columns, rows, message)
         if sql:
-            self._add_query_history(sql)
+            self._add_query_history(sql, self._active_connection_name)
         if message:
             self.statusBar().showMessage(message)
         else:
@@ -1060,7 +1112,7 @@ class MainWindow(QMainWindow):
     def _on_multi_result(self, results, logs, bottom_tabs, console, original_sql=""):
         console_idx = bottom_tabs.indexOf(console)
         if original_sql:
-            self._add_query_history(original_sql)
+            self._add_query_history(original_sql, self._active_connection_name)
 
         result_count = 0
         for cols, rows, stmt in results:

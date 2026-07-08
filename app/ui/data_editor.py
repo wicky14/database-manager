@@ -246,12 +246,18 @@ class DataEditor(QWidget):
         self._table_widget.horizontalHeader().setMinimumSectionSize(120)
         self._table_widget.cellChanged.connect(self._on_cell_changed)
         self._table_widget.installEventFilter(self)
-        layout.addWidget(self._table_widget, stretch=1)
+
+        self._bottom_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._bottom_splitter.addWidget(self._table_widget)
 
         self._console = ConsolePanel()
-        self._console.setVisible(False)
         self._console.setMinimumHeight(100)
-        layout.addWidget(self._console)
+        self._console.setVisible(False)
+        self._bottom_splitter.addWidget(self._console)
+
+        self._bottom_splitter.setStretchFactor(0, 1)
+        self._bottom_splitter.setStretchFactor(1, 0)
+        layout.addWidget(self._bottom_splitter, stretch=1)
 
         self._spinner = SpinnerOverlay(self)
         self._spinner.hide()
@@ -288,12 +294,18 @@ class DataEditor(QWidget):
         return super().eventFilter(obj, event)
 
     def _show_console(self):
-        self._console.setVisible(True)
-        self._console_btn.setChecked(True)
+        if not self._console.isVisible():
+            self._console.setVisible(True)
+            self._console_btn.setChecked(True)
+            total = self._bottom_splitter.height()
+            self._bottom_splitter.setSizes([int(total * 0.6), int(total * 0.4)])
 
     def _toggle_console(self, visible: bool):
-        self._console.setVisible(visible)
-        self._console_btn.setChecked(visible)
+        if visible:
+            self._show_console()
+        else:
+            self._console.setVisible(False)
+            self._console_btn.setChecked(False)
 
     @staticmethod
     def _validate_clause(text: str) -> str:
@@ -411,8 +423,12 @@ class DataEditor(QWidget):
 
         try:
             columns, rows, _ = self._driver.execute_query(base_sql)
+            self._console.add_entry(base_sql, f"{len(rows)} rows loaded", True)
+            self._show_console()
         except Exception as e:
             self._spinner.hide()
+            self._console.add_entry(base_sql, str(e), False)
+            self._show_console()
             self._table_widget.blockSignals(False)
             self._loading = False
             self._show_error(str(e))
@@ -853,6 +869,7 @@ class DataEditor(QWidget):
             msg = f"Saved {len(statements)} change(s)"
             self.save_logged.emit(sql_summary, msg, True)
             self._console.add_entry(sql_summary, msg, True)
+            self._show_console()
             self.status_message.emit(msg)
         except Exception as e:
             self._spinner.hide()
@@ -863,6 +880,7 @@ class DataEditor(QWidget):
             err = str(e)
             self.save_logged.emit(sql_summary, err, False)
             self._console.add_entry(sql_summary, err, False)
+            self._show_console()
             QMessageBox.critical(self, "Save Failed", err)
             return
 

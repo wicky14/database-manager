@@ -96,7 +96,8 @@ class SQLServerDriver(BaseDriver):
                 ORDER BY TABLE_SCHEMA, TABLE_NAME
             """)
             for row in cur.fetchall():
-                cache.tables.append(TableInfo(name=row[1], schema=row[0]))
+                schema = "" if row[0] == "dbo" else row[0]
+                cache.tables.append(TableInfo(name=row[1], schema=schema))
 
             cur.execute("""
                 SELECT TABLE_SCHEMA, TABLE_NAME
@@ -104,7 +105,8 @@ class SQLServerDriver(BaseDriver):
                 ORDER BY TABLE_SCHEMA, TABLE_NAME
             """)
             for row in cur.fetchall():
-                cache.views.append(TableInfo(name=row[1], schema=row[0]))
+                schema = "" if row[0] == "dbo" else row[0]
+                cache.views.append(TableInfo(name=row[1], schema=schema))
 
             cur.execute("""
                 SELECT SPECIFIC_NAME, ROUTINE_TYPE, DATA_TYPE

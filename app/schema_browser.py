@@ -32,6 +32,7 @@ class SchemaBrowser(QWidget):
     edit_view_requested = Signal(str, str)
     edit_routine_requested = Signal(str, str)
     edit_trigger_requested = Signal(str)
+    create_trigger_requested = Signal()
     create_table_requested = Signal()
 
     def __init__(self, parent=None):
@@ -480,7 +481,19 @@ class SchemaBrowser(QWidget):
             menu.exec(self._tree.mapToGlobal(pos))
             return
 
-        if role in ("view_group", "routine_group", "trigger_group"):
+        if role == "trigger_group":
+            menu = QMenu(self)
+            new_trigger = QAction("Create Trigger...", self)
+            new_trigger.triggered.connect(self.create_trigger_requested.emit)
+            menu.addAction(new_trigger)
+            menu.addSeparator()
+            refresh = QAction("Refresh", self)
+            refresh.triggered.connect(self.refresh_requested.emit)
+            menu.addAction(refresh)
+            menu.exec(self._tree.mapToGlobal(pos))
+            return
+
+        if role in ("view_group", "routine_group"):
             menu = QMenu(self)
             refresh = QAction("Refresh", self)
             refresh.triggered.connect(self.refresh_requested.emit)

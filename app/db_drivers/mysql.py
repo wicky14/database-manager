@@ -1,4 +1,4 @@
-import mysql.connector
+import pymysql
 from typing import Any
 
 from .base import BaseDriver, ConnectionConfig, SchemaCache, TableInfo, ColumnInfo, RoutineInfo
@@ -6,9 +6,9 @@ from .base import BaseDriver, ConnectionConfig, SchemaCache, TableInfo, ColumnIn
 
 class MySQLDriver(BaseDriver):
     def connect(self) -> None:
-        if self._connection and self._connection.is_connected():
+        if self._connection and self._connection.open:
             return
-        self._connection = mysql.connector.connect(
+        self._connection = pymysql.connect(
             host=self.config.host,
             port=self.config.port or 3306,
             user=self.config.user,
@@ -16,35 +16,35 @@ class MySQLDriver(BaseDriver):
             database=self.config.database,
             connect_timeout=10,
             charset=self.config.charset or "utf8mb4",
+            autocommit=False,
         )
-        self._connection.autocommit = False
         self._cache = None
 
     def disconnect(self) -> None:
-        if self._connection and self._connection.is_connected():
+        if self._connection and self._connection.open:
             self._connection.close()
         self._connection = None
         self._cache = None
 
     def is_connected(self) -> bool:
-        return self._connection is not None and self._connection.is_connected()
+        return self._connection is not None and self._connection.open
 
     def ping(self) -> bool:
         try:
-            if not self._connection or not self._connection.is_connected():
+            if not self._connection or not self._connection.open:
                 return False
-            self._connection.ping(reconnect=False, attempts=1)
+            self._connection.ping()
             return True
         except Exception:
             return False
 
     def execute_query(self, sql: str) -> tuple[list[str], list[list[Any]], str | None]:
-        if not self._connection or not self._connection.is_connected():
+        if not self._connection or not self._connection.open:
             raise RuntimeError("Not connected")
         cur = self._connection.cursor()
         try:
             cur.execute(sql)
-            if cur.with_rows:
+            if cur.description:
                 columns = [desc[0] for desc in cur.description]
                 rows = list(cur.fetchall())
                 cur.close()
@@ -75,7 +75,8 @@ class MySQLDriver(BaseDriver):
                 ORDER BY table_name
             """)
             for row in cur.fetchall():
-                cache.tables.append(TableInfo(name=row[1], schema=row[0]))
+                schema = "" if row[0] == self.config.database else row[0]
+                cache.tables.append(TableInfo(name=row[1], schema=schema))
 
             cur.execute("""
                 SELECT table_schema, table_name
@@ -84,7 +85,8 @@ class MySQLDriver(BaseDriver):
                 ORDER BY table_name
             """)
             for row in cur.fetchall():
-                cache.views.append(TableInfo(name=row[1], schema=row[0]))
+                schema = "" if row[0] == self.config.database else row[0]
+                cache.views.append(TableInfo(name=row[1], schema=schema))
 
             cur.execute("""
                 SELECT ROUTINE_NAME, ROUTINE_TYPE, DTD_IDENTIFIER
@@ -176,7 +178,7 @@ class MySQLDriver(BaseDriver):
             for stmt in source.split(";;"):
                 stmt = stmt.strip()
                 if stmt:
-                    cur.execute(stmt, multi=True)
+                    cur.execute(stmt)
             self._connection.commit()
         except Exception:
             self._connection.rollback()
@@ -197,10 +199,10 @@ class MySQLDriver(BaseDriver):
         return list(indexes.values())
 
     def cancel_query(self) -> None:
-        if self._connection and self._connection.is_connected():
+        if self._connection and self._connection.open:
             cur = self._connection.cursor()
             try:
-                cur.execute(f"KILL QUERY {self._connection.connection_id}")
+                cur.execute(f"KILL QUERY {self._connection.thread_id()}")
             except Exception:
                 pass
             cur.close()
@@ -215,7 +217,7 @@ class MySQLDriver(BaseDriver):
     def save_trigger(self, trigger: str, source: str) -> None:
         cur = self._connection.cursor()
         try:
-            cur.execute(source, multi=True)
+            cur.execute(source)
             self._connection.commit()
         except Exception:
             self._connection.rollback()

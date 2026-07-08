@@ -1,24 +1,35 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPlainTextEdit, QPushButton, QSplitter, QMessageBox, QWidget,
+    QPlainTextEdit, QPushButton, QSplitter, QMessageBox, QWidget, QLineEdit,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 
 class QueryHistoryDialog(QDialog):
-    def __init__(self, queries: list[str], parent=None):
+    history_cleared = Signal()
+
+    def __init__(self, queries: list, parent=None, current_connection=""):
         super().__init__(parent)
         self.selected_query = ""
-        self._queries = list(queries)
-        self.setWindowTitle("Query History")
+        self._all_queries = queries
+        self._current_connection = current_connection
+        self._filtered = []
+        self.setWindowTitle(
+            f"Query History - {current_connection}" if current_connection else "Query History"
+        )
         self.setMinimumSize(650, 420)
         self.resize(700, 450)
         self._build_ui()
-        self._populate_list()
+        self._rebuild_filtered()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search query history...")
+        self._search.textChanged.connect(self._rebuild_filtered)
+        layout.addWidget(self._search)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -61,8 +72,20 @@ class QueryHistoryDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+    def _rebuild_filtered(self):
+        text = self._search.text().lower()
+        self._filtered = [
+            q for q in self._all_queries
+            if q["connection"] == self._current_connection
+            and (not text or text in q["sql"].lower())
+        ]
+        self._populate_list()
+
     def _populate_list(self):
-        for sql in reversed(self._queries):
+        self._list.blockSignals(True)
+        self._list.clear()
+        for entry in reversed(self._filtered):
+            sql = entry["sql"]
             display = sql.strip().replace("\n", " ")[:60]
             if len(sql) > 60:
                 display += "..."
@@ -70,6 +93,8 @@ class QueryHistoryDialog(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, sql)
             item.setToolTip(sql)
             self._list.addItem(item)
+        self._list.blockSignals(False)
+        self._on_select(-1)
 
     def _on_select(self, row: int):
         if row < 0:
@@ -91,12 +116,13 @@ class QueryHistoryDialog(QDialog):
     def _clear_all(self):
         reply = QMessageBox.warning(
             self, "Clear History",
-            "Clear all query history?",
+            "Clear all query history for this connection?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self._queries.clear()
-            self._list.clear()
+            self._all_queries[:] = [q for q in self._all_queries if q["connection"] != self._current_connection]
+            self.history_cleared.emit()
+            self._rebuild_filtered()
             self._preview.clear()
             self._use_btn.setEnabled(False)

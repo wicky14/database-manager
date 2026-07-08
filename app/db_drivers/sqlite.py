@@ -88,7 +88,7 @@ class SQLiteDriver(BaseDriver):
                 ORDER BY name
             """)
             for row in cur.fetchall():
-                cache.tables.append(TableInfo(name=row[0], schema="main"))
+                cache.tables.append(TableInfo(name=row[0], schema=""))
 
             cur.execute("""
                 SELECT name FROM sqlite_master
@@ -96,7 +96,7 @@ class SQLiteDriver(BaseDriver):
                 ORDER BY name
             """)
             for row in cur.fetchall():
-                cache.views.append(TableInfo(name=row[0], schema="main"))
+                cache.views.append(TableInfo(name=row[0], schema=""))
 
             cur.execute("""
                 SELECT name FROM sqlite_master

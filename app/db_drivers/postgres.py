@@ -76,7 +76,8 @@ class PostgreSQLDriver(BaseDriver):
                 ORDER BY table_schema, table_name
             """)
             for row in cur.fetchall():
-                cache.tables.append(TableInfo(name=row[1], schema=row[0]))
+                schema = "" if row[0] == "public" else row[0]
+                cache.tables.append(TableInfo(name=row[1], schema=schema))
 
             cur.execute("""
                 SELECT table_schema, table_name
@@ -85,7 +86,8 @@ class PostgreSQLDriver(BaseDriver):
                 ORDER BY table_schema, table_name
             """)
             for row in cur.fetchall():
-                cache.views.append(TableInfo(name=row[1], schema=row[0]))
+                schema = "" if row[0] == "public" else row[0]
+                cache.views.append(TableInfo(name=row[1], schema=schema))
 
             cur.execute("""
                 SELECT n.nspname, p.proname, p.prorettype::regtype::text,
