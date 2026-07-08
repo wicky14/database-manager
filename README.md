@@ -1,4 +1,3 @@
-<img width="1496" height="860" alt="fix" src="https://github.com/user-attachments/assets/e49cb6d7-1d45-4f18-b827-14a436bdde0a" />
 # Database Manager
 
 A multi-database management GUI built with PySide6. Supports PostgreSQL, MySQL, SQLite, and SQL Server.
