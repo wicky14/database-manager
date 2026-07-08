@@ -23,7 +23,7 @@ A multi-database management GUI built with PySide6. Supports PostgreSQL, MySQL, 
 | Database   | Library               | Notes                        |
 |------------|-----------------------|------------------------------|
 | PostgreSQL | psycopg2-binary       |                              |
-| MySQL      | mysql-connector-python|                              |
+| MySQL      | pymysql               |                              |
 | SQLite     | sqlite3 (built-in)    |                              |
 | SQL Server | pymssql               | Supports `GO` batch separator|
 
