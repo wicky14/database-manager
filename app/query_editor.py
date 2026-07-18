@@ -34,6 +34,7 @@ SQL_KEYWORDS = {
     "DEALLOCATE", "DECLARE", "CURSOR", "FETCH", "CLOSE", "MOVE", "OPEN",
     "RETURN", "RETURNS", "CALL", "DO", "PERFORM", "RAISE", "EXCEPTION",
     "WHILE", "LOOP", "FOR", "FOREACH", "REPEAT", "UNTIL", "EXIT", "CONTINUE",
+    "EXEC",
 }
 
 
@@ -131,6 +132,7 @@ class LineNumberArea(QWidget):
 
 class QueryEditor(QPlainTextEdit):
     query_requested = Signal(str)
+    object_clicked = Signal(str)
 
     def __init__(self, colors=None, parent=None):
         super().__init__(parent)
@@ -138,7 +140,13 @@ class QueryEditor(QPlainTextEdit):
         self._schema_cache = None
         self._completer = None
         self._base_words = []
+        self._tables = []
+        self._views = []
+        self._routines = []
         self._columns_map = {}
+        self._known_objects: set[str] = set()
+        self._ctrl_hover_word = ""
+        self.setMouseTracking(True)
         self._setup_editor()
         self._setup_completer()
         self._setup_shortcuts()
@@ -224,8 +232,25 @@ class QueryEditor(QPlainTextEdit):
     def set_schema(self, tables: list[str], views: list[str],
                    routines: list[str], columns_map: dict[str, list[str]]):
         self._columns_map = {k.lower(): v for k, v in columns_map.items()}
-        self._base_words = sorted(set(SQL_KEYWORDS) | set(tables) | set(views) | set(routines))
+        self._tables = list(tables)
+        self._views = list(views)
+        self._routines = list(routines)
+        self._known_objects = set(tables) | set(views) | set(routines)
+        self._base_words = sorted(set(SQL_KEYWORDS) | self._known_objects)
         self._completer.setModel(QStringListModel(self._base_words))
+
+    @staticmethod
+    def _get_context(before: str) -> str:
+        exec_pat = re.search(r'\b(?:EXEC|EXECUTE|CALL)\s+\w*\s*$', before, re.IGNORECASE)
+        if exec_pat:
+            return "routine"
+        obj_pat = re.search(
+            r'\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+\w*\s*$',
+            before, re.IGNORECASE,
+        )
+        if obj_pat:
+            return "object"
+        return "all"
 
     @staticmethod
     def _get_aliases(text: str) -> dict[str, str]:
@@ -346,6 +371,11 @@ class QueryEditor(QPlainTextEdit):
         )
 
     def keyPressEvent(self, event):
+        ctrl = event.key() == Qt.Key.Key_Control
+
+        if ctrl and self._completer:
+            self._completer.popup().hide()
+
         if self._completer and self._completer.popup().isVisible():
             if event.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return, Qt.Key.Key_Escape,
                                Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
@@ -354,31 +384,43 @@ class QueryEditor(QPlainTextEdit):
 
         super().keyPressEvent(event)
 
-        if self._completer:
-            cursor = self.textCursor()
-            line = cursor.block().text()
-            col = cursor.columnNumber()
-            before = line[:col]
-            match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*$', before)
-            prefix = match.group() if match else ""
-            if len(prefix) >= 1:
-                if '.' in prefix:
-                    ref, _, after = prefix.rpartition('.')
-                    if ref:
-                        words = self._get_dot_completions(ref)
-                        if words:
-                            self._completer.setModel(QStringListModel(words))
-                            self._completer.setCompletionPrefix(prefix)
-                            cr = self.cursorRect()
-                            cr.setWidth(self._completer.popup().sizeHintForColumn(0)
-                                        + self._completer.popup().verticalScrollBar().sizeHint().width())
-                            self._completer.complete(cr)
-                        else:
-                            self._completer.popup().hide()
+        if ctrl or not self._completer:
+            return
+
+        cursor = self.textCursor()
+        line = cursor.block().text()
+        col = cursor.columnNumber()
+        before = line[:col]
+        match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*$', before)
+        prefix = match.group() if match else ""
+        if len(prefix) >= 1:
+            if '.' in prefix:
+                ref, _, after = prefix.rpartition('.')
+                if ref:
+                    words = self._get_dot_completions(ref)
+                    if words:
+                        self._completer.setModel(QStringListModel(words))
+                        self._completer.setCompletionPrefix(prefix)
+                        cr = self.cursorRect()
+                        cr.setWidth(self._completer.popup().sizeHintForColumn(0)
+                                    + self._completer.popup().verticalScrollBar().sizeHint().width())
+                        self._completer.complete(cr)
                     else:
                         self._completer.popup().hide()
                 else:
-                    self._completer.setModel(QStringListModel(self._base_words))
+                    self._completer.popup().hide()
+            else:
+                ctx = self._get_context(before[:match.start()])
+                if ctx == "routine":
+                    words = list(self._routines)
+                elif ctx == "object":
+                    words = list(set(self._tables) | set(self._views))
+                else:
+                    words = self._base_words
+                if not words:
+                    self._completer.popup().hide()
+                else:
+                    self._completer.setModel(QStringListModel(words))
                     self._completer.setCompletionPrefix(prefix)
                     if self._completer.completionCount() > 0:
                         cr = self.cursorRect()
@@ -387,8 +429,8 @@ class QueryEditor(QPlainTextEdit):
                         self._completer.complete(cr)
                     else:
                         self._completer.popup().hide()
-            else:
-                self._completer.popup().hide()
+        else:
+            self._completer.popup().hide()
 
     def _get_dot_completions(self, ref: str) -> list[str]:
         text = self.toPlainText()
@@ -437,6 +479,63 @@ class QueryEditor(QPlainTextEdit):
         menu.addAction(select_all_action)
 
         menu.exec(event.globalPos())
+
+    def mousePressEvent(self, event):
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            cursor = self.cursorForPosition(event.pos())
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+            word = cursor.selectedText().strip()
+            if word:
+                self.setTextCursor(cursor)
+                self.object_clicked.emit(word)
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            cursor = self.cursorForPosition(event.pos())
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+            word = cursor.selectedText().strip()
+            if word and word in self._known_objects:
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+                if word != self._ctrl_hover_word:
+                    self._ctrl_hover_word = word
+                    self._update_extra_selections(cursor)
+            else:
+                self._clear_ctrl_hover()
+        else:
+            self._clear_ctrl_hover()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._clear_ctrl_hover()
+        super().leaveEvent(event)
+
+    def _update_extra_selections(self, link_cursor):
+        selections = []
+        if not self.isReadOnly():
+            sel = QTextEdit.ExtraSelection()
+            line_color = QColor(self._colors.get("comment", "#5c6370"))
+            line_color.setAlpha(40)
+            sel.format.setBackground(line_color)
+            sel.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            sel.cursor = self.textCursor()
+            sel.cursor.clearSelection()
+            selections.append(sel)
+
+        sel = QTextEdit.ExtraSelection()
+        sel.format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SingleUnderline)
+        sel.format.setForeground(QColor("#89b4fa"))
+        sel.cursor = link_cursor
+        selections.append(sel)
+
+        self.setExtraSelections(selections)
+
+    def _clear_ctrl_hover(self):
+        if self._ctrl_hover_word:
+            self._ctrl_hover_word = ""
+            self.unsetCursor()
+            self._highlight_current_line()
 
     def clear_schema(self):
         self._completer.setModel(QStringListModel([]))

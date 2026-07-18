@@ -91,6 +91,10 @@ class BaseDriver(ABC):
         ...
 
     @abstractmethod
+    def get_table_ddl(self, table: str, schema: str = "") -> str:
+        ...
+
+    @abstractmethod
     def get_trigger_source(self, trigger: str) -> str:
         ...
 

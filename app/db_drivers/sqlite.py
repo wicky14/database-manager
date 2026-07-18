@@ -172,6 +172,14 @@ class SQLiteDriver(BaseDriver):
     def get_config(self) -> ConnectionConfig:
         return self.config
 
+    def get_table_ddl(self, table: str, schema: str = "") -> str:
+        with self._lock:
+            cur = self._connection.cursor()
+            cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,))
+            result = cur.fetchone()
+            cur.close()
+        return result[0] if result else ""
+
     def get_trigger_source(self, trigger: str) -> str:
         with self._lock:
             cur = self._connection.cursor()

@@ -207,6 +207,17 @@ class MySQLDriver(BaseDriver):
                 pass
             cur.close()
 
+    def get_table_ddl(self, table: str, schema: str = "") -> str:
+        cur = self._connection.cursor()
+        try:
+            name = f"{self._quote_id(schema)}." if schema else ""
+            name += self._quote_id(table)
+            cur.execute(f"SHOW CREATE TABLE {name}")
+            result = cur.fetchone()
+            return result[1] if result else ""
+        finally:
+            cur.close()
+
     def get_trigger_source(self, trigger: str) -> str:
         cur = self._connection.cursor()
         cur.execute(f"SHOW CREATE TRIGGER {self._quote_id(trigger)}")

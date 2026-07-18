@@ -263,6 +263,105 @@ class PostgreSQLDriver(BaseDriver):
         if self._connection and self._connection.closed == 0:
             self._connection.cancel()
 
+    def get_table_ddl(self, table: str, schema: str = "") -> str:
+        cur = self._connection.cursor()
+        try:
+            full_name = f'"{schema}"."{table}"' if schema else f'"{table}"'
+
+            if schema:
+                cur.execute("""
+                    SELECT column_name, data_type, character_maximum_length,
+                           numeric_precision, numeric_scale, is_nullable,
+                           column_default
+                    FROM information_schema.columns
+                    WHERE table_name = %s AND table_schema = %s
+                    ORDER BY ordinal_position
+                """, (table, schema))
+            else:
+                cur.execute("""
+                    SELECT column_name, data_type, character_maximum_length,
+                           numeric_precision, numeric_scale, is_nullable,
+                           column_default
+                    FROM information_schema.columns
+                    WHERE table_name = %s
+                      AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                    ORDER BY ordinal_position
+                """, (table,))
+
+            columns_data = cur.fetchall()
+
+            if schema:
+                cur.execute("""
+                    SELECT kcu.column_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                        AND tc.table_schema = kcu.table_schema
+                    WHERE tc.table_name = %s
+                      AND tc.table_schema = %s
+                      AND tc.constraint_type = 'PRIMARY KEY'
+                    ORDER BY kcu.ordinal_position
+                """, (table, schema))
+            else:
+                cur.execute("""
+                    SELECT kcu.column_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                        AND tc.table_schema = kcu.table_schema
+                    WHERE tc.table_name = %s
+                      AND tc.constraint_type = 'PRIMARY KEY'
+                      AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+                    ORDER BY kcu.ordinal_position
+                """, (table,))
+            pk_cols = [row[0] for row in cur.fetchall()]
+
+            _type_map = {
+                'character varying': 'varchar',
+                'character': 'char',
+                'timestamp without time zone': 'timestamp',
+                'timestamp with time zone': 'timestamptz',
+                'double precision': 'double precision',
+                'boolean': 'boolean',
+                'integer': 'integer',
+                'bigint': 'bigint',
+                'smallint': 'smallint',
+                'numeric': 'numeric',
+                'real': 'real',
+                'text': 'text',
+            }
+
+            def _fmt_type(dt, max_len, num_prec, num_scale):
+                dt = _type_map.get(dt, dt)
+                if dt in ('varchar', 'char'):
+                    if max_len:
+                        return f"{dt}({max_len})"
+                    return dt
+                if dt in ('numeric', 'decimal'):
+                    if num_prec is not None:
+                        if num_scale is not None and num_scale != 0:
+                            return f"{dt}({num_prec}, {num_scale})"
+                        return f"{dt}({num_prec})"
+                return dt
+
+            lines = []
+            for col_name, dt, max_len, num_prec, num_scale, nullable, default in columns_data:
+                col_type = _fmt_type(dt, max_len, num_prec, num_scale)
+                col_def = f'    "{col_name}" {col_type}'
+                if not nullable:
+                    col_def += " NOT NULL"
+                if default:
+                    col_def += f" DEFAULT {default}"
+                lines.append(col_def)
+
+            if pk_cols:
+                pk_str = ", ".join(f'"{c}"' for c in pk_cols)
+                lines.append(f"    PRIMARY KEY ({pk_str})")
+
+            return f"CREATE TABLE {full_name} (\n" + ",\n".join(lines) + "\n)"
+        finally:
+            cur.close()
+
     def get_trigger_source(self, trigger: str) -> str:
         cur = self._connection.cursor()
         cur.execute("""

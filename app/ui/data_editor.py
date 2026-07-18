@@ -4,16 +4,18 @@ from typing import Any
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QPushButton, QLabel, QLineEdit,
+    QHeaderView, QPushButton, QLabel, QPlainTextEdit,
     QMessageBox, QAbstractItemView, QMenu, QApplication, QToolButton,
     QCompleter, QSplitter, QStyledItemDelegate, QDateEdit, QDateTimeEdit,
 )
-from PySide6.QtCore import Qt, Signal, QSize, QStringListModel, QEvent
-from PySide6.QtGui import QAction, QColor, QIcon
+from PySide6.QtCore import Qt, Signal, QSize, QEvent
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeyEvent, QPalette, QTextCursor
 
 from .spinner import SpinnerOverlay
 from .console import ConsolePanel
 from ..icon_manager import IconManager
+from ..query_editor import SqlHighlighter
+from .theme import get_syntax_colors
 
 _MODIFIED_BG = QColor("#fde68a")
 _NEW_ROW_BG = QColor("#d1fae5")
@@ -73,9 +75,81 @@ class DateTimeDelegate(QStyledItemDelegate):
             model.setData(index, editor.text(), Qt.ItemDataRole.EditRole)
 
 
+class _SqlInput(QPlainTextEdit):
+    returnPressed = Signal()
+
+    def __init__(self, colors, placeholder="", parent=None):
+        super().__init__(parent)
+        self._highlighter = SqlHighlighter(self.document(), colors)
+        self._completer = None
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setTabChangesFocus(False)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.setFixedHeight(self.fontMetrics().height() + 8)
+        self.setPlaceholderText(placeholder)
+        font = self.font()
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        self.setFont(font)
+
+    def setCompleter(self, completer: QCompleter):
+        if self._completer:
+            try:
+                self._completer.activated.disconnect()
+            except RuntimeError:
+                pass
+        self._completer = completer
+        if completer:
+            completer.setWidget(self)
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.activated.connect(self._insert_completion)
+            self.textChanged.connect(self._update_completer)
+
+    def _insert_completion(self, text: str):
+        tc = self.textCursor()
+        tc.select(QTextCursor.SelectionType.WordUnderCursor)
+        was = self.blockSignals(True)
+        tc.insertText(text)
+        self.blockSignals(was)
+        self.setTextCursor(tc)
+
+    def _update_completer(self):
+        if not self._completer:
+            return
+        tc = self.textCursor()
+        tc.select(QTextCursor.SelectionType.WordUnderCursor)
+        prefix = tc.selectedText()
+        if not prefix or prefix.isspace():
+            self._completer.popup().hide()
+            return
+        self._completer.setCompletionPrefix(prefix)
+        if self._completer.completionCount() > 0:
+            cr = self.cursorRect()
+            cr.setWidth(self._completer.popup().sizeHintForColumn(0) + 20)
+            self._completer.complete(cr)
+        else:
+            self._completer.popup().hide()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._completer and self._completer.popup().isVisible():
+                idx = self._completer.popup().currentIndex()
+                if idx.isValid():
+                    text = idx.data(Qt.ItemDataRole.DisplayRole)
+                    self._insert_completion(text)
+                self._completer.popup().hide()
+                return
+            self.returnPressed.emit()
+            return
+        super().keyPressEvent(event)
+
+
 class DataEditor(QWidget):
     status_message = Signal(str)
     save_logged = Signal(str, str, bool)  # sql, message, success
+    show_ddl_requested = Signal(str, str)  # ddl_text, title
 
     def __init__(self, driver, table: str, schema: str = ""):
         super().__init__()
@@ -106,6 +180,57 @@ class DataEditor(QWidget):
 
     def _icon(self, name: str) -> QIcon:
         return IconManager.get_icon(name)
+
+    def _toolbar_btn_style(self):
+        text = self.palette().color(QPalette.ColorRole.Text).name()
+        hover = self.palette().color(QPalette.ColorRole.AlternateBase).name()
+        return f"""
+            QPushButton {{
+                background: transparent;
+                color: {text};
+                border: none;
+                border-radius: 4px;
+                padding: 3px 6px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background: {hover};
+            }}
+        """
+
+    def _update_save_btn_style(self):
+        if self._has_unsaved:
+            self._save_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #22c55e;
+                    color: white;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 3px 6px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #16a34a;
+                }
+                QPushButton:pressed {
+                    background-color: #15803d;
+                }
+            """)
+        else:
+            self._save_btn.setStyleSheet(self._toolbar_btn_style())
+
+    def _on_show_ddl(self):
+        self._spinner.show()
+        QApplication.processEvents()
+        try:
+            ddl = self._driver.get_table_ddl(self._table, self._schema)
+            self._spinner.hide()
+            title = f"{self._schema + '.' if self._schema else ''}{self._table}"
+            self.show_ddl_requested.emit(ddl, title)
+        except Exception as e:
+            self._spinner.hide()
+            QMessageBox.critical(self, "Error", f"Failed to get DDL:\n{e}")
 
     def refresh_icons(self):
         self._refresh_btn.setIcon(self._icon("refresh"))
@@ -176,12 +301,20 @@ class DataEditor(QWidget):
         self._add_row_btn.clicked.connect(self._add_row)
         toolbar.addWidget(self._add_row_btn)
 
-        self._save_btn = QToolButton()
+        self._save_btn = QPushButton()
         self._save_btn.setIcon(self._icon("save"))
+        self._save_btn.setText(" Save Changes")
         self._save_btn.setToolTip("Save changes")
         self._save_btn.clicked.connect(self._save_changes)
         self._save_btn.setEnabled(False)
+        self._update_save_btn_style()
         toolbar.addWidget(self._save_btn)
+
+        self._show_ddl_btn = QPushButton("Show DDL")
+        self._show_ddl_btn.setToolTip("View CREATE TABLE statement")
+        self._show_ddl_btn.clicked.connect(self._on_show_ddl)
+        self._show_ddl_btn.setStyleSheet(self._toolbar_btn_style())
+        toolbar.addWidget(self._show_ddl_btn)
 
         toolbar.addStretch()
         self._console_btn = QToolButton()
@@ -201,13 +334,14 @@ class DataEditor(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
+        colors = get_syntax_colors()
+
         where_container = QWidget()
         where_layout = QHBoxLayout(where_container)
         where_layout.setContentsMargins(8, 0, 8, 0)
         where_label = QLabel("WHERE")
         where_layout.addWidget(where_label)
-        self._where_input = QLineEdit()
-        self._where_input.setPlaceholderText("column = value ...")
+        self._where_input = _SqlInput(colors, "column = value ...")
         self._where_input.returnPressed.connect(self._go)
         where_layout.addWidget(self._where_input)
         splitter.addWidget(where_container)
@@ -217,8 +351,7 @@ class DataEditor(QWidget):
         order_layout.setContentsMargins(8, 0, 8, 0)
         order_label = QLabel("ORDER BY")
         order_layout.addWidget(order_label)
-        self._order_input = QLineEdit()
-        self._order_input.setPlaceholderText("column_name [ASC|DESC] ...")
+        self._order_input = _SqlInput(colors, "column_name [ASC|DESC] ...")
         self._order_input.returnPressed.connect(self._go)
         order_layout.addWidget(self._order_input)
         splitter.addWidget(order_container)
@@ -322,7 +455,7 @@ class DataEditor(QWidget):
             col = self._quote(self._sort_column)
             direction = self._sort_direction or "ASC"
             return f"ORDER BY {col} {direction}"
-        text = self._order_input.text().strip()
+        text = self._order_input.toPlainText().strip()
         if text:
             self._validate_clause(text)
             upper = text.upper().strip()
@@ -332,7 +465,7 @@ class DataEditor(QWidget):
         return ""
 
     def _build_where_clause(self) -> str:
-        text = self._where_input.text().strip()
+        text = self._where_input.toPlainText().strip()
         if text:
             self._validate_clause(text)
             if text.upper().startswith("WHERE "):
@@ -379,7 +512,7 @@ class DataEditor(QWidget):
                 self._sort_direction = None
 
         if self._sort_column:
-            self._order_input.setText(f"{self._sort_column} {self._sort_direction}")
+                self._order_input.setPlainText(f"{self._sort_column} {self._sort_direction}")
 
         header = self._table_widget.horizontalHeader()
         if self._sort_direction == "DESC":
@@ -442,6 +575,7 @@ class DataEditor(QWidget):
         self._deleted_rows.clear()
         self._has_unsaved = False
         self._save_btn.setEnabled(False)
+        self._update_save_btn_style()
 
         if not columns:
             self._table_widget.setColumnCount(0)
@@ -454,11 +588,15 @@ class DataEditor(QWidget):
         self._table_widget.setColumnCount(len(columns))
         self._table_widget.setHorizontalHeaderLabels(columns)
 
-        completer = QCompleter(columns)
-        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        self._where_input.setCompleter(completer)
-        self._order_input.setCompleter(completer)
+        where_completer = QCompleter(columns)
+        where_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        where_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._where_input.setCompleter(where_completer)
+
+        order_completer = QCompleter(columns)
+        order_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        order_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._order_input.setCompleter(order_completer)
 
         self._pk_indices = []
         self._alignment = [Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter] * len(columns)
@@ -586,6 +724,7 @@ class DataEditor(QWidget):
         self._new_rows.add(row_idx)
         self._has_unsaved = True
         self._save_btn.setEnabled(True)
+        self._update_save_btn_style()
 
         for c in range(len(self._columns)):
             item = QTableWidgetItem("NULL")
@@ -640,6 +779,7 @@ class DataEditor(QWidget):
         self._data[row][col] = new_val
         self._has_unsaved = bool(self._modified or self._new_rows or self._deleted_rows)
         self._save_btn.setEnabled(self._has_unsaved)
+        self._update_save_btn_style()
         self._update_page_info()
 
     def _context_menu(self, pos):
@@ -728,6 +868,7 @@ class DataEditor(QWidget):
         self._deleted_rows.add(row)
         self._has_unsaved = True
         self._save_btn.setEnabled(True)
+        self._update_save_btn_style()
         self._highlight_row(row, _DELETED_BG)
         for c in range(self._table_widget.columnCount()):
             item = self._table_widget.item(row, c)
@@ -753,6 +894,7 @@ class DataEditor(QWidget):
                     item.setForeground(_DARK_FG)
         self._has_unsaved = bool(self._modified or self._new_rows or self._deleted_rows)
         self._save_btn.setEnabled(self._has_unsaved)
+        self._update_save_btn_style()
         self._update_page_info()
 
     def _highlight_row(self, row: int, color: QColor):
@@ -855,6 +997,7 @@ class DataEditor(QWidget):
         if not statements:
             self._has_unsaved = False
             self._save_btn.setEnabled(False)
+            self._update_save_btn_style()
             self._update_page_info()
             return
 

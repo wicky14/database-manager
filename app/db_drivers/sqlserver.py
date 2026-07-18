@@ -253,6 +253,88 @@ class SQLServerDriver(BaseDriver):
         cur.close()
         return list(indexes.values())
 
+    def get_table_ddl(self, table: str, schema: str = "") -> str:
+        cur = self._connection.cursor()
+        try:
+            full_name = f"[{schema}].[{table}]" if schema else f"[{table}]"
+
+            if schema:
+                cur.execute("""
+                    SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
+                           NUMERIC_PRECISION, NUMERIC_SCALE, IS_NULLABLE,
+                           COLUMN_DEFAULT
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_NAME = %s AND TABLE_SCHEMA = %s
+                    ORDER BY ORDINAL_POSITION
+                """, (table, schema))
+            else:
+                cur.execute("""
+                    SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
+                           NUMERIC_PRECISION, NUMERIC_SCALE, IS_NULLABLE,
+                           COLUMN_DEFAULT
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_NAME = %s
+                    ORDER BY ORDINAL_POSITION
+                """, (table,))
+
+            columns_data = cur.fetchall()
+
+            if schema:
+                cur.execute("""
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                    JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                        ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                    WHERE kcu.TABLE_NAME = %s
+                      AND kcu.TABLE_SCHEMA = %s
+                      AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                    ORDER BY ORDINAL_POSITION
+                """, (table, schema))
+            else:
+                cur.execute("""
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                    JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                        ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                    WHERE kcu.TABLE_NAME = %s
+                      AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                    ORDER BY ORDINAL_POSITION
+                """, (table,))
+            pk_cols = [row[0] for row in cur.fetchall()]
+
+            def _fmt_type(dt, max_len, num_prec, num_scale):
+                u = dt.upper()
+                if u in ('VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR'):
+                    if max_len == -1 or max_len is None:
+                        return f"{dt}(MAX)"
+                    return f"{dt}({max_len})"
+                if u in ('DECIMAL', 'NUMERIC'):
+                    if num_prec is not None:
+                        if num_scale is not None:
+                            return f"{dt}({num_prec}, {num_scale})"
+                        return f"{dt}({num_prec})"
+                return dt
+
+            lines = []
+            for col_name, dt, max_len, num_prec, num_scale, nullable, default in columns_data:
+                col_type = _fmt_type(dt, max_len, num_prec, num_scale)
+                col_def = f"    [{col_name}] {col_type}"
+                if col_name in pk_cols and nullable is False:
+                    col_def += " NOT NULL"
+                elif not nullable:
+                    col_def += " NOT NULL"
+                if default:
+                    col_def += f" DEFAULT {default}"
+                lines.append(col_def)
+
+            if pk_cols:
+                pk_str = ", ".join(f"[{c}]" for c in pk_cols)
+                lines.append(f"    PRIMARY KEY ({pk_str})")
+
+            return f"CREATE TABLE {full_name} (\n" + ",\n".join(lines) + "\n)"
+        finally:
+            cur.close()
+
     def get_trigger_source(self, trigger: str) -> str:
         cur = self._connection.cursor()
         cur.execute("SELECT OBJECT_DEFINITION(OBJECT_ID(%s))", (trigger,))

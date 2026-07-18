@@ -141,7 +141,12 @@ def split_sql_statements(sql: str) -> list[str]:
     if not sql:
         return []
     sql = re.sub(r"^\s*--\s*$", "", sql, flags=re.MULTILINE)
-    s = re.sub(r"\n\s*\n", ";", sql)
+    sql = re.sub(r"^\s*GO\s*$", ";", sql, flags=re.MULTILINE | re.IGNORECASE)
+    has_ddl = re.search(
+        r"^\s*(CREATE|ALTER)\s+(PROCEDURE|FUNCTION|VIEW|TRIGGER)\b",
+        sql, re.IGNORECASE | re.MULTILINE,
+    )
+    s = re.sub(r"\n\s*\n", ";", sql) if not has_ddl else sql
     stmts = []
     current = []
     in_string = False
@@ -556,11 +561,19 @@ class MainWindow(QMainWindow):
         try:
             data_editor = DataEditor(self._driver, table, schema)
             data_editor.status_message.connect(self.statusBar().showMessage)
+            data_editor.show_ddl_requested.connect(self._on_show_ddl)
             tab_title = title or f"{schema + '.' if schema else ''}{table} -- Editing"
             self._tabs.addTab(data_editor, tab_title)
             self._tabs.setCurrentWidget(data_editor)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
+
+    def _on_show_ddl(self, ddl: str, title: str):
+        if not ddl:
+            QMessageBox.information(self, "DDL", f"No DDL found for {title}")
+            return
+        self._open_query_tab(ddl, f"DDL: {title}")
+        self.statusBar().showMessage(f"DDL for {title} loaded")
 
     def _on_edit_table(self, table: str, schema: str):
         if not self._driver:
@@ -627,6 +640,7 @@ class MainWindow(QMainWindow):
         editor.setPlainText("-- Loading routine source...")
         editor.setReadOnly(True)
         editor.query_requested.connect(self._execute_sql)
+        editor.object_clicked.connect(self._on_object_clicked)
         splitter.addWidget(editor)
 
         bottom_tabs = QTabWidget()
@@ -684,6 +698,7 @@ class MainWindow(QMainWindow):
                              "END;")
         editor.setReadOnly(False)
         editor.query_requested.connect(self._execute_sql)
+        editor.object_clicked.connect(self._on_object_clicked)
         splitter.addWidget(editor)
 
         bottom_tabs = QTabWidget()
@@ -721,6 +736,7 @@ class MainWindow(QMainWindow):
         editor.setPlainText("-- Loading trigger source...")
         editor.setReadOnly(True)
         editor.query_requested.connect(self._execute_sql)
+        editor.object_clicked.connect(self._on_object_clicked)
         splitter.addWidget(editor)
 
         bottom_tabs = QTabWidget()
@@ -757,6 +773,37 @@ class MainWindow(QMainWindow):
         log_msg = f"Trigger source loaded ({len(source)} chars)"
         if console:
             console.add_entry(trigger, log_msg, True)
+
+    def _on_object_clicked(self, name: str):
+        if not self._driver:
+            self.statusBar().showMessage("No database connection")
+            return
+        try:
+            cache = self._driver.get_schema_cache()
+        except Exception:
+            self.statusBar().showMessage("Failed to load schema cache")
+            return
+        for t in cache.tables:
+            if t.name == name:
+                self.statusBar().showMessage(f"Opening table: {name}")
+                self._on_edit_data(name, t.schema)
+                return
+        for v in cache.views:
+            if v.name == name:
+                self.statusBar().showMessage(f"Opening view: {name}")
+                self._on_edit_view(name, v.schema)
+                return
+        for r in cache.routines:
+            if r.name == name:
+                self.statusBar().showMessage(f"Opening routine: {name}")
+                self._on_edit_routine(name, r.routine_type)
+                return
+        for tr in cache.triggers:
+            if tr == name:
+                self.statusBar().showMessage(f"Opening trigger: {name}")
+                self._on_edit_trigger(name)
+                return
+        self.statusBar().showMessage(f"Object '{name}' not found")
 
     def _on_truncate_table(self, table: str, schema: str):
         if not self._driver:
@@ -889,6 +936,7 @@ class MainWindow(QMainWindow):
         if sql:
             editor.setPlainText(sql)
         editor.query_requested.connect(self._execute_sql)
+        editor.object_clicked.connect(self._on_object_clicked)
         splitter.addWidget(editor)
 
         bottom_tabs = QTabWidget()
@@ -1076,6 +1124,7 @@ class MainWindow(QMainWindow):
         editor = QueryEditor()
         editor.setPlainText(sql)
         editor.setReadOnly(True)
+        editor.object_clicked.connect(self._on_object_clicked)
         layout.addWidget(editor)
 
         result = ResultViewer()
@@ -1205,6 +1254,7 @@ class MainWindow(QMainWindow):
         editor = QueryEditor()
         editor.setPlainText(f"-- {title}")
         editor.setReadOnly(True)
+        editor.object_clicked.connect(self._on_object_clicked)
         layout.addWidget(editor)
 
         result = ResultViewer()
