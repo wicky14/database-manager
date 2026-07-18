@@ -212,8 +212,15 @@ class MultiQueryThread(QThread):
         logs = []
         for stmt in self._statements:
             try:
-                cols, rows, msg = self._driver.execute_query(stmt)
-                results.append((cols, rows, stmt))
+                if is_paginatable(stmt):
+                    _, count_rows, _ = self._driver.execute_query(build_count_sql(stmt))
+                    total = int(count_rows[0][0]) if count_rows else 0
+                    safe = build_page_sql(stmt, self._db_type, 1, 200)
+                else:
+                    total = 0
+                    safe = stmt
+                cols, rows, msg = self._driver.execute_query(safe)
+                results.append((cols, rows, stmt, total))
                 display = stmt.strip()[:120]
                 if cols:
                     logs.append((display, f"{len(rows)} rows returned", True))
@@ -1164,7 +1171,7 @@ class MainWindow(QMainWindow):
             self._add_query_history(original_sql, self._active_connection_name)
 
         result_count = 0
-        for cols, rows, stmt in results:
+        for cols, rows, stmt, total in results:
             if not cols:
                 continue
             result_count += 1
@@ -1178,7 +1185,7 @@ class MainWindow(QMainWindow):
                 rv._page = 1
                 rv._page_size = 200
                 try:
-                    rv.set_pagination(len(rows), 1, 200)
+                    rv.set_pagination(total, 1, 200)
                 except Exception:
                     pass
                 rv.page_changed.connect(self._on_page_changed)

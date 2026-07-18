@@ -416,7 +416,12 @@ class QueryEditor(QPlainTextEdit):
                 elif ctx == "object":
                     words = list(set(self._tables) | set(self._views))
                 else:
-                    words = self._base_words
+                    words = list(self._base_words)
+                    qt = self.toPlainText()
+                    for m in re.finditer(r'\b(?:FROM|JOIN)\s+(\w+)', qt, re.IGNORECASE):
+                        tbl = m.group(1).lower()
+                        if tbl in self._columns_map:
+                            words.extend(self._columns_map[tbl])
                 if not words:
                     self._completer.popup().hide()
                 else:
