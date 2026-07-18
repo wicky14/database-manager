@@ -29,7 +29,7 @@ A multi-database management GUI built with PySide6. Supports PostgreSQL, MySQL, 
 
 ## Screenshot
 
-<img width="1496" height="860" alt="fix" src="https://github.com/user-attachments/assets/7eb47866-1c6b-48c5-8e4a-d26a19836e32" />
+<img width="1038" height="762" alt="database_manager" src="https://github.com/user-attachments/assets/f005b901-b78c-4cf1-b780-3d8d66ad5553" />
 
 
 
