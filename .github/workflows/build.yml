@@ -111,6 +111,9 @@ jobs:
           name: database-manager-linux
           path: release
 
+      - run: mv release/database-manager release/database-manager-linux
+        shell: bash
+
       - uses: actions/download-artifact@v4
         with:
           name: database-manager-windows-portable
@@ -125,6 +128,9 @@ jobs:
         with:
           name: database-manager-arm64
           path: release
+
+      - run: mv release/database-manager release/database-manager-arm64
+        shell: bash
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
