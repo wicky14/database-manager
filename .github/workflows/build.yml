@@ -71,8 +71,36 @@ jobs:
           name: database-manager-windows-installer
           path: dist/Database-Manager-Setup-*.exe
 
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y freetds-dev
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: python -m PyInstaller build.spec --noconfirm --clean
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-manager-arm64
+          path: dist/database-manager
+
   create-release:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-arm64]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -91,6 +119,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: database-manager-windows-installer
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: database-manager-arm64
           path: release
 
       - name: Create Release

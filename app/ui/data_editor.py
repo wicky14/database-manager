@@ -626,7 +626,11 @@ class DataEditor(QWidget):
         self._table_widget.setRowCount(len(rows))
         for r, row in enumerate(self._data):
             for c, val in enumerate(row):
-                item = QTableWidgetItem(str(val) if val is not None else "NULL")
+                if val is not None and c < len(self._col_types) and self._col_types[c] in _DATE_TYPES:
+                    display_val = str(val).split('.')[0]
+                else:
+                    display_val = str(val) if val is not None else "NULL"
+                item = QTableWidgetItem(display_val)
                 if val is None:
                     item.setForeground(_NULL_COLOR)
                 if c < len(self._alignment):
