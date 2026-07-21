@@ -60,6 +60,7 @@ class DateTimeDelegate(QStyledItemDelegate):
         if val is None or val == "NULL":
             editor.clear()
             return
+        val = str(val).split('.')[0]
         col_type = self._col_types[index.column()] if index.column() < len(self._col_types) else ""
         fmt = "yyyy-MM-dd" if col_type in ("DATE",) else "yyyy-MM-dd HH:mm:ss"
         dt = editor.dateTimeFromText(val)
