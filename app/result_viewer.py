@@ -48,6 +48,8 @@ class ResultViewer(QWidget):
         self._page = 1
         self._page_size = 200
         self._total = 0
+        self._sort_column: str | None = None
+        self._sort_direction: str | None = None
         self._build_ui()
 
     def _icon(self, name: str) -> QIcon:
@@ -117,6 +119,7 @@ class ResultViewer(QWidget):
         self._table.horizontalHeader().setSectionsClickable(True)
         self._table.horizontalHeader().setSectionsMovable(True)
         self._table.setSortingEnabled(True)
+        self._table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self._table.verticalHeader().setDefaultSectionSize(28)
         self._table.cellChanged.connect(self._on_cell_changed)
 
@@ -178,7 +181,10 @@ class ResultViewer(QWidget):
         self._table.resizeColumnsToContents()
 
         self._table.blockSignals(False)
-        self._table.setSortingEnabled(True)
+
+        has_pagination = hasattr(self, "_page_sql") and self._page_sql
+        self._table.setSortingEnabled(not has_pagination)
+        self._restore_sort_indicator()
 
         rows_text = f"{len(rows)} row{'s' if len(rows) != 1 else ''}"
         cols_text = f"{len(columns)} column{'s' if len(columns) != 1 else ''}"
@@ -227,9 +233,14 @@ class ResultViewer(QWidget):
         self.page_changed.emit(self._page, self._page_size)
 
     def show_error(self, error: str):
+        self._sort_column = None
+        self._sort_direction = None
+        self._page_sql = None
+        self._page_db_type = None
         self._table.setSortingEnabled(False)
         self._table.blockSignals(True)
         self._table.clear()
+        self._table.horizontalHeader().setSortIndicatorShown(False)
         self._table.setRowCount(1)
         self._table.setColumnCount(1)
         self._table.setHorizontalHeaderLabels(["Error"])
@@ -246,11 +257,16 @@ class ResultViewer(QWidget):
     def clear_results(self):
         self._columns = []
         self._rows = []
+        self._sort_column = None
+        self._sort_direction = None
+        self._page_sql = None
+        self._page_db_type = None
         self._table.setSortingEnabled(False)
         self._table.blockSignals(True)
         self._table.clear()
         self._table.setRowCount(0)
         self._table.setColumnCount(0)
+        self._table.horizontalHeader().setSortIndicatorShown(False)
         self._table.blockSignals(False)
         self._info_label.setText("Ready")
         self._csv_btn.setVisible(False)
@@ -266,6 +282,52 @@ class ResultViewer(QWidget):
         item = self._table.item(row, col)
         if item:
             pass
+
+    def _on_header_clicked(self, col_idx: int):
+        col_name = self._columns[col_idx] if col_idx < len(self._columns) else None
+        if not col_name:
+            return
+
+        if self._sort_column != col_name:
+            self._sort_column = col_name
+            self._sort_direction = "DESC"
+        else:
+            if self._sort_direction == "DESC":
+                self._sort_direction = "ASC"
+            else:
+                self._sort_column = None
+                self._sort_direction = None
+
+        header = self._table.horizontalHeader()
+        if self._sort_direction == "DESC":
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(col_idx, Qt.SortOrder.DescendingOrder)
+        elif self._sort_direction == "ASC":
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(col_idx, Qt.SortOrder.AscendingOrder)
+        else:
+            header.setSortIndicatorShown(False)
+
+        is_paginated = hasattr(self, "_page_sql") and self._page_sql
+        if is_paginated:
+            self._table.setSortingEnabled(False)
+            self._page = 1
+            self.page_changed.emit(self._page, self._page_size)
+
+    def _restore_sort_indicator(self):
+        if not self._sort_column or not self._sort_direction:
+            return
+        header = self._table.horizontalHeader()
+        for c in range(len(self._columns)):
+            if self._columns[c] == self._sort_column:
+                order = (
+                    Qt.SortOrder.DescendingOrder
+                    if self._sort_direction == "DESC"
+                    else Qt.SortOrder.AscendingOrder
+                )
+                header.setSortIndicatorShown(True)
+                header.setSortIndicator(c, order)
+                break
 
     def _export_csv(self):
         if not self._columns:

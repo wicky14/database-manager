@@ -127,12 +127,22 @@ def build_count_sql(sql: str) -> str:
     return f"SELECT COUNT(*) AS _total FROM ({sql}) AS _cnt"
 
 
-def build_page_sql(sql: str, db_type: str, page: int, page_size: int) -> str:
+def build_page_sql(sql: str, db_type: str, page: int, page_size: int,
+                    sort_column: str | None = None, sort_direction: str | None = None) -> str:
     sql = sql.strip().rstrip(";").strip()
     offset = (page - 1) * page_size
     limit = page_size
+
+    order_clause = ""
+    if sort_column and sort_direction:
+        quoted = f"[{sort_column}]" if db_type == "sqlserver" else f'"{sort_column}"'
+        order_clause = f"ORDER BY {quoted} {sort_direction}"
+
     if db_type == "sqlserver":
-        return f"SELECT * FROM ({sql}) AS _p ORDER BY (SELECT NULL) OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
+        order = order_clause or "ORDER BY (SELECT NULL)"
+        return f"SELECT * FROM ({sql}) AS _p {order} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
+    if order_clause:
+        return f"SELECT * FROM ({sql}) AS _sub {order_clause} LIMIT {limit} OFFSET {offset}"
     return f"{sql} LIMIT {limit} OFFSET {offset}"
 
 
@@ -1102,7 +1112,10 @@ class MainWindow(QMainWindow):
 
         result._page = page
         result._page_size = page_size
-        sql = build_page_sql(result._page_sql, result._page_db_type, page, page_size)
+        sort_column = getattr(result, "_sort_column", None)
+        sort_direction = getattr(result, "_sort_direction", None)
+        sql = build_page_sql(result._page_sql, result._page_db_type, page, page_size,
+                             sort_column, sort_direction)
 
         self.statusBar().showMessage(f"Loading page {page}...")
 
